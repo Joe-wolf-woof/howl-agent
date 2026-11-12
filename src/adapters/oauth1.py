@@ -46,9 +46,10 @@ def build_authorization_header(
     url: str,
     consumer_key: str,
     consumer_secret: str,
-    access_token: str,
-    token_secret: str,
+    access_token: str | None = None,
+    token_secret: str = "",
     extra_params: list[tuple[str, str]] | None = None,
+    extra_oauth_params: list[tuple[str, str]] | None = None,
     nonce: str | None = None,
     timestamp: str | None = None,
 ) -> str:
@@ -57,6 +58,9 @@ def build_authorization_header(
     url にクエリ文字列が含まれていれば、そのパラメータも署名対象に含める。
     extra_params は application/x-www-form-urlencoded のボディ用
     （JSON ボディの場合は署名対象に含めないため、呼び出し側で渡さない）。
+    extra_oauth_params は oauth_callback / oauth_verifier など、
+    署名対象かつヘッダに載せる追加の oauth_* パラメータ（3脚認可フロー用）。
+    access_token=None のときは oauth_token を含めない（request_token 取得時）。
     """
     parsed = urllib.parse.urlparse(url)
     base_url = urllib.parse.urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", "", ""))
@@ -67,9 +71,12 @@ def build_authorization_header(
         ("oauth_nonce", nonce or secrets.token_hex(16)),
         ("oauth_signature_method", "HMAC-SHA1"),
         ("oauth_timestamp", timestamp or str(int(time.time()))),
-        ("oauth_token", access_token),
         ("oauth_version", "1.0"),
     ]
+    if access_token:
+        oauth_params.append(("oauth_token", access_token))
+    if extra_oauth_params:
+        oauth_params.extend(extra_oauth_params)
     all_params = oauth_params + query_params + (extra_params or [])
     base_string = signature_base_string(method, base_url, normalize_params(all_params))
     signature = sign(base_string, consumer_secret, token_secret)

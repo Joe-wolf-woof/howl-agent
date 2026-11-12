@@ -34,3 +34,17 @@ def load_dotenv(path: Path = ENV_PATH) -> list[str]:
             os.environ[key] = value
             loaded.append(key)
     return loaded
+
+
+def update_env_values(updates: dict[str, str], path: Path = ENV_PATH) -> None:
+    """既存の .env の該当キーだけを新しい値で書き換える（他キーは保持）。
+
+    認可フローで新しい Access Token を得たときに使う。値は表示・記録しない。
+    """
+    parsed = parse_env_text(path.read_text(encoding="utf-8-sig")) if path.exists() else {}
+    parsed.update(updates)
+    body = "".join(f"{k}={v}\n" for k, v in parsed.items())
+    path.write_text(body, encoding="utf-8")
+    path.chmod(0o600)
+    for key, value in updates.items():
+        os.environ[key] = value
