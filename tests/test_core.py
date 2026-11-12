@@ -29,7 +29,7 @@ class PersonaTest(unittest.TestCase):
 
     def test_system_prompt_contains_identity(self):
         prompt = build_system_prompt(self.persona)
-        for needle in ["ハウル", "ワガハイ", "家の人間", "人間", "開放性", "140字以内"]:
+        for needle in ["ハウル", "ワガハイ", "ご主人", "人間", "開放性", "140字以内"]:
             self.assertIn(needle, prompt)
 
     def test_choose_theme_validates(self):
