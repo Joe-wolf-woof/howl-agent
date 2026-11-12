@@ -17,6 +17,7 @@ import argparse
 import sys
 
 from . import store
+from .config import load_dotenv
 from .filters import check_post
 from .generator import choose_theme, generate_post, make_client
 from .persona import load_persona
@@ -62,6 +63,18 @@ def cmd_approve(args) -> int:
     return 0
 
 
+def cmd_verify(args) -> int:
+    from .adapters.x_api import XApiAdapter
+
+    try:
+        me = XApiAdapter().me()
+    except RuntimeError as e:
+        print(f"認証確認に失敗: {e}", file=sys.stderr)
+        return 1
+    print(f"認証OK: @{me['username']}（{me['name']}）として接続できました")
+    return 0
+
+
 def cmd_post(args) -> int:
     draft = store.get_draft(args.id)
     if draft["status"] != "approved":
@@ -103,7 +116,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--adapter", default="dryrun", choices=["dryrun", "x"])
     p.set_defaults(func=cmd_post)
 
+    p = sub.add_parser("verify", help="X APIの認証だけを確認する（投稿しない）")
+    p.set_defaults(func=cmd_verify)
+
     args = parser.parse_args(argv)
+    load_dotenv()
     return args.func(args)
 
 

@@ -41,16 +41,34 @@ class XApiAdapter:
         self.access_token = os.environ["X_ACCESS_TOKEN"]
         self.token_secret = os.environ["X_ACCESS_SECRET"]
 
-    def post(self, text: str) -> dict:
-        # JSON ボディは OAuth 署名の対象パラメータに含めない（仕様通り）
-        auth = build_authorization_header(
-            method="POST",
-            url=TWEETS_URL,
+    def _auth_header(self, method: str, url: str) -> str:
+        return build_authorization_header(
+            method=method,
+            url=url,
             consumer_key=self.consumer_key,
             consumer_secret=self.consumer_secret,
             access_token=self.access_token,
             token_secret=self.token_secret,
         )
+
+    def me(self) -> dict:
+        """認証確認用: 自分自身のアカウント情報を読む（投稿しない読み取り確認）。"""
+        url = "https://api.x.com/2/users/me"
+        req = urllib.request.Request(
+            url, headers={"Authorization": self._auth_header("GET", url)}, method="GET"
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", "replace")[:300]
+            raise RuntimeError(f"X API auth check failed: HTTP {e.code}: {body}") from e
+        d = data["data"]
+        return {"id": d["id"], "username": d["username"], "name": d["name"]}
+
+    def post(self, text: str) -> dict:
+        # JSON ボディは OAuth 署名の対象パラメータに含めない（仕様通り）
+        auth = self._auth_header("POST", TWEETS_URL)
         req = urllib.request.Request(
             TWEETS_URL,
             data=json.dumps({"text": text}).encode("utf-8"),
