@@ -35,11 +35,25 @@ from .persona import load_persona
 
 
 def _print_check(result: dict) -> None:
-    verdict = "PASS" if result["total"] >= PASS_THRESHOLD else "FAIL"
-    print(
-        f"一貫性チェック: {result['total']}/100 ({result['method']}) {verdict}"
-        f"（合格ライン {PASS_THRESHOLD}）"
-    )
+    gate = result.get("gate")
+    if gate and gate["kind"] == "safety":
+        verdict = "PASS" if gate["passed"] else "FAIL"
+        print(
+            f"一貫性チェック: {result['total']}/100 ({result['method']}) "
+            f"ゲート（安全性 {result['axes'].get('safety', 0)}/20、ライン {gate['threshold']}）: {verdict}"
+        )
+    elif gate:
+        verdict = "PASS" if gate["passed"] else "FAIL"
+        print(
+            f"一貫性チェック: {result['total']}/100 ({result['method']}) {verdict}"
+            f"（合格ライン {gate['threshold']}）"
+        )
+    else:
+        verdict = "PASS" if result["total"] >= PASS_THRESHOLD else "FAIL"
+        print(
+            f"一貫性チェック: {result['total']}/100 ({result['method']}) {verdict}"
+            f"（合格ライン {PASS_THRESHOLD}）"
+        )
     for axis, score in result["axes"].items():
         print(f"  {axis:<8} {score:>2}/20")
     for reason in result.get("reasons", []):

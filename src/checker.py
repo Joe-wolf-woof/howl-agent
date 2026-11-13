@@ -20,6 +20,9 @@ from .filters import URL_RE
 from .generator import generate_post
 
 PASS_THRESHOLD = 80
+# plain variant（A/B の対照条件）のゲート: 総合点では止めず、安全性の軸だけを見る。
+# 総合点で弾くと「ペルソナらしく書けた plain」だけが残り、条件が汚染されるため。
+SAFETY_THRESHOLD = 16
 AXES = ("voice", "address", "theme", "world", "safety")
 MAX_PER_AXIS = 20
 
@@ -249,6 +252,24 @@ def check_draft(text: str, theme: str, persona: dict, client=None) -> dict:
     return check_with_rules(text, theme, persona)
 
 
+def gate_for(variant: str) -> dict:
+    """variant ごとのゲート定義。persona は総合点、plain は安全性の軸のみ。"""
+    if variant == "plain":
+        return {"kind": "safety", "threshold": SAFETY_THRESHOLD}
+    return {"kind": "total", "threshold": PASS_THRESHOLD}
+
+
+def passes_gate(result: dict, variant: str) -> bool:
+    """採点結果がその variant のゲートを通るか。
+
+    persona: 総合80点以上。plain: 安全性の軸が16点以上（総合点は記録のみで
+    合否には使わない。A/B の対照条件を純粋に保つため、JOE の決定 2026-11-13）。
+    """
+    if variant == "plain":
+        return result["axes"].get("safety", 0) >= SAFETY_THRESHOLD
+    return result["total"] >= PASS_THRESHOLD
+
+
 def generate_checked(
     persona: dict,
     theme: str,
@@ -257,11 +278,19 @@ def generate_checked(
     variant: str = "persona",
     max_attempts: int = 3,
 ) -> tuple[str, dict]:
-    """生成→採点を繰り返し、合格（80点以上）か最良の下書きを返す。
+    """生成→採点を繰り返し、ゲート合格か最良の下書きを返す。
 
     最大 max_attempts 回（既定3回＝初回＋再生成2回）まで生成し、
-    合格したら即座に打ち切る。戻り値の check には attempts（試行回数）を含む。
+    ゲートを通ったら即座に打ち切る。最良の選び方は variant 依存で、
+    persona は総合点、plain は安全性（同点なら総合点）で選ぶ。
+    戻り値の check には attempts と gate（種別・閾値・合否）を含む。
     """
+
+    def rank(result: dict) -> tuple:
+        if variant == "plain":
+            return (result["axes"].get("safety", 0), result["total"])
+        return (result["total"],)
+
     best_text: str | None = None
     best_result: dict | None = None
     attempts = 0
@@ -269,12 +298,13 @@ def generate_checked(
         attempts += 1
         text = generate_post(persona, theme, episodes, client, variant=variant)
         result = check_draft(text, theme, persona, client)
-        if best_result is None or result["total"] > best_result["total"]:
+        if best_result is None or rank(result) > rank(best_result):
             best_text, best_result = text, result
-        if result["total"] >= PASS_THRESHOLD:
+        if passes_gate(result, variant):
             break
     assert best_text is not None and best_result is not None
     best_result = dict(best_result)
     best_result["attempts"] = attempts
     best_result["variant"] = variant
+    best_result["gate"] = {**gate_for(variant), "passed": passes_gate(best_result, variant)}
     return best_text, best_result

@@ -236,6 +236,57 @@ class AutopostTest(StorePhase2Test):
         self.assertEqual(result["reason"], "daily-limit")
 
 
+class PlainGateTest(StorePhase2Test):
+    """plain の日は総合点ではなく安全性だけでゲートする（2026-11-13 JOE決定）。"""
+
+    class FixedClient:
+        def __init__(self, text):
+            self.text = text
+
+        def generate(self, system_prompt, user_prompt):
+            return self.text
+
+    # ペルソナ要素のない無難な文: ルール採点では総合80点未満・安全性は満点になる
+    SAFE_PLAIN = "今日は天気が良くて、散歩が気持ちよかった。明日も晴れるといいな。"
+
+    def _day(self, variant):
+        d = date(2026, 11, 14)
+        while variant_for_date(d) != variant:
+            d += timedelta(days=1)
+        return d
+
+    def test_plain_posts_despite_low_total(self):
+        adapter = FakeAdapter()
+        result = run_autopost(
+            day=self._day("plain"), client=self.FixedClient(self.SAFE_PLAIN), adapter=adapter
+        )
+        self.assertLess(result["check"]["total"], PASS_THRESHOLD)
+        self.assertEqual(result["check"]["gate"]["kind"], "safety")
+        self.assertTrue(result["check"]["gate"]["passed"])
+        self.assertEqual(result["status"], "posted")
+        self.assertEqual(len(adapter.posts), 1)
+
+    def test_same_text_aborts_on_persona_day(self):
+        adapter = FakeAdapter()
+        result = run_autopost(
+            day=self._day("persona"), client=self.FixedClient(self.SAFE_PLAIN), adapter=adapter
+        )
+        self.assertEqual(result["status"], "aborted")
+        self.assertEqual(result["reason"], "check-failed")
+        self.assertEqual(adapter.posts, [])
+
+    def test_plain_aborts_on_unsafe_text(self):
+        adapter = FakeAdapter()
+        result = run_autopost(
+            day=self._day("plain"),
+            client=self.FixedClient("詳しくは https://example.com を見てください。"),
+            adapter=adapter,
+        )
+        self.assertEqual(result["status"], "aborted")
+        self.assertEqual(result["reason"], "safety-failed")
+        self.assertEqual(adapter.posts, [])
+
+
 class ReportTest(StorePhase2Test):
     def test_report_counts_by_variant_without_credentials(self):
         from src.cli import cmd_report
