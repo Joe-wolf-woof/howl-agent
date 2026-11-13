@@ -286,6 +286,7 @@ def generate_checked(
     client,
     variant: str = "persona",
     max_attempts: int = 3,
+    directive: str | None = None,
 ) -> tuple[str, dict]:
     """生成→採点を繰り返し、ゲート合格か最良の下書きを返す。
 
@@ -305,7 +306,9 @@ def generate_checked(
     attempts = 0
     for _ in range(max_attempts):
         attempts += 1
-        text = generate_post(persona, theme, episodes, client, variant=variant)
+        text = generate_post(
+            persona, theme, episodes, client, variant=variant, directive=directive
+        )
         result = check_draft(text, theme, persona, client)
         if best_result is None or rank(result) > rank(best_result):
             best_text, best_result = text, result

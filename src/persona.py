@@ -91,13 +91,28 @@ def build_plain_user_prompt(theme: str) -> str:
     return f"テーマ: {theme}\nこのテーマで、Xへの投稿文を1つだけ書いてください。"
 
 
-def build_user_prompt(persona: dict, theme: str, episodes: list[dict]) -> str:
+def build_user_prompt(
+    persona: dict, theme: str, episodes: list[dict], directive: str | None = None
+) -> str:
     instruction = persona["theme_instructions"][theme]
     lines = [f"テーマ: {theme}", f"指示: {instruction}"]
-    if episodes:
+    if directive:
+        lines.append("")
+        lines.append("## 今日の方針（行動選択レイヤーの判断）")
+        lines.append(directive)
+    shown = [ep for ep in episodes if ep.get("type") == "shown"]
+    others = [ep for ep in episodes if ep.get("type") != "shown"]
+    if others:
         lines.append("")
         lines.append("## 最近のエピソード記憶（矛盾させず、必要なら軽く触れてよい）")
-        for ep in episodes:
+        for ep in others:
+            lines.append(f"- {ep.get('date', '')}: {ep.get('summary', '')}")
+    if shown:
+        lines.append("")
+        lines.append(
+            "## 見せてもらった物（ARアプリで家の人間が見せてくれた物への反応。矛盾させず、必要なら触れてよい）"
+        )
+        for ep in shown:
             lines.append(f"- {ep.get('date', '')}: {ep.get('summary', '')}")
     lines.append("")
     lines.append("この条件で、Xへの投稿文を1つだけ書いてください。")

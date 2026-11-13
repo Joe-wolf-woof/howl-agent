@@ -3,7 +3,7 @@
 WebAR作品『Spatial AI NPC』のオオカミを、独立したAIキャラクター **ハウル** として運用するためのエージェント本体。
 Xで自律発信し、WebARでは同じキャラクターに「会える」——作って終わりではなく、運用と測定までを含むプロジェクトの Phase 1 実装です。
 
-## 現在の状態（Phase 1 + Phase 2）
+## 現在の状態（Phase 1 + Phase 2 + Phase 3）
 
 - ✅ ペルソナエンジン: Big Fiveパラメータ＋行動変換ルールを `persona/persona.json` に外出しし、システムプロンプトへ変換
 - ✅ 投稿生成: Gemini API（モデルフォールバック付き）。APIキーなしでも `--stub` で全フロー検証可能
@@ -15,6 +15,8 @@ Xで自律発信し、WebARでは同じキャラクターに「会える」—�
 - ✅ 一貫性チェッカー（Phase 2）: ペルソナ適合を5軸×20点＝100点で採点（本命は Gemini 採点、キーなし時はルールベースに自動フォールバック）。合格ラインは persona が総合80点、plain は安全性の軸が満点かつ総合60点超え（A/B の条件を保ちつつ品質の下限を担保）
 - ✅ 全自動投稿（Phase 2 / Phase B）: variant 別のゲート＋NGフィルタ通過が必須。キルスイッチ（環境変数／ファイル）と1日2件上限つき
 - ✅ A/B測定（Phase 2）: variant を日替わりで交互（persona＝記憶＋ペルソナ／plain＝素の生成）に切り替え、下書きとエピソードに記録。`report` で variant 別に集計し、X の public_metrics 平均も取得可能
+- ✅ 記憶の統合（Phase 3）: ARアプリ『ハウリング』の「見せた記憶」を `import-episodes` で中央の記憶へ取り込み（冪等）、生成文脈では「見せてもらった物」として優先的に参照。逆方向は `export-memory` でアプリ形式の memory.json を書き出し
+- ✅ 行動選択レイヤー（Phase 3）: 投稿前に状態（記憶・投稿履歴・テーマの間隔・継続目標・直近の反応）を見て、今日の一手（記憶について書く／巡回表のテーマ／問いかけ／休む）を選択。判断は下書きと `data/decisions.jsonl` に記録される
 
 ## 使い方
 
@@ -56,7 +58,25 @@ touch data/AUTOPOST_OFF
 # 測定レポート: 投稿済みエピソードを variant 別に集計。
 # 実投稿の tweet_id があり X 認証情報が使える場合は、いいね/返信/インプレッションの平均も出す
 python -m src.cli report [--no-metrics]
+
+# 『ハウリング』の「見せた記憶」書き出しJSON（[{date, kind:"shown", text}]）を
+# 中央のエピソード記憶へ取り込む。(date, text) で重複判定するため冪等
+python -m src.cli import-episodes howling-episodes.json
+
+# 中央ストアからアプリ形式の memory.json を書き出す（posts / episodes / updatedAt）
+python -m src.cli export-memory ../howling/data/memory.json
 ```
+
+### Phase 3: 行動選択レイヤー（編集長）
+
+Phase B までの autopost は「日付ローテーションで決めたテーマで書く」だけだった。
+Phase 3 からは投稿前に `src/selector.py` が現在の状態を見て今日の一手を選ぶ:
+
+- **状態**: 直近のエピソード（見せてもらった物を含む）、直近の投稿とテーマ別の間隔、巡回表の今日の候補、継続目標（`data/goals.json`:「週に一度は見せてもらった物について書く」「問いかけは週に1〜2回まで」）の進捗、実投稿モードでは直近投稿の反応メトリクス
+- **選択肢**: `memory`（記憶にある出来事について書く）／`theme`（巡回表のテーマ＝既定案）／`question`（人間に問いかける）／`rest`（今日は休む。投稿もエピソードも残らない）
+- **実装**: 本命は Gemini の JSON 選択、失敗時はルールベース（3日以内の未投稿の「見せた記憶」があれば memory、なければ theme）
+- **A/B の保全**: plain の日は状態からエピソード本文とペルソナ情報を一切含めず（件数と日付だけ）、選択肢も theme / question / rest のみ
+- **記録**: 選択は結果と下書きの `decision` に残り、実運用では `data/decisions.jsonl` にも1行ずつ追記される。安全装置（ゲート・NGフィルタ・上限・キルスイッチ）は Phase 2 のまま
 
 テスト:
 

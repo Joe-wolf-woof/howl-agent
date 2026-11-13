@@ -20,6 +20,13 @@ Phase 2:
       全自動投稿（Phase B）。安全装置とチェッカー必須。A/B variant は日替わり。
   python -m src.cli report [--no-metrics]
       投稿済みエピソードを variant 別に集計し、可能なら X の指標平均も出す。
+
+Phase 3:
+  python -m src.cli import-episodes <path>
+      『ハウリング』の「見せた記憶」書き出しJSONを中央の記憶へ取り込む（冪等）。
+  python -m src.cli export-memory <path>
+      中央ストアからアプリ形式の memory.json を書き出す。
+      autopost は投稿前に行動選択レイヤーが今日の一手を選ぶようになった。
 """
 from __future__ import annotations
 
@@ -66,9 +73,9 @@ def cmd_generate(args) -> int:
     client = make_client(stub=args.stub)
     check = None
     if args.check:
-        text, check = generate_checked(persona, theme, store.recent_episodes(5), client)
+        text, check = generate_checked(persona, theme, store.context_episodes(5), client)
     else:
-        text = generate_post(persona, theme, store.recent_episodes(5), client)
+        text = generate_post(persona, theme, store.context_episodes(5), client)
     issues = check_post(text, persona)
     draft = store.create_draft(text, theme, persona["version"], check=check)
     if issues:
@@ -208,6 +215,9 @@ def cmd_autopost(args) -> int:
         f"autopost {result['date']}: status={result['status']}"
         + (f" reason={result['reason']}" if result.get("reason") else "")
     )
+    if result.get("decision"):
+        d = result["decision"]
+        print(f"decision: action={d['action']} ({d['method']}) - {d['reason']}")
     if result.get("theme"):
         print(f"theme={result['theme']} variant={result['variant']}")
     if result.get("check"):
@@ -218,7 +228,31 @@ def cmd_autopost(args) -> int:
         print("フィルタ警告: " + " / ".join(result["filter_issues"]))
     if result["status"] == "posted":
         print(f"投稿しました (draft {result['draft_id']})")
-    return 0 if result["status"] in ("posted", "dry-run") else 1
+    return 0 if result["status"] in ("posted", "dry-run", "rested") else 1
+
+
+def cmd_import_episodes(args) -> int:
+    import json
+    from pathlib import Path
+
+    path = Path(args.path)
+    try:
+        items = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        print(f"読み込みに失敗: {e}", file=sys.stderr)
+        return 1
+    if not isinstance(items, list):
+        print("エラー: 書き出しJSONは配列である必要があります", file=sys.stderr)
+        return 1
+    added, skipped = store.import_shown_episodes(items)
+    print(f"import-episodes: {added} 件を取り込み、{skipped} 件をスキップしました")
+    return 0
+
+
+def cmd_export_memory(args) -> int:
+    posts, episodes = store.export_app_memory(args.path)
+    print(f"export-memory: posts {posts} 件 / episodes {episodes} 件を {args.path} に書き出しました")
+    return 0
 
 
 def cmd_report(args) -> int:
@@ -291,6 +325,14 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("report", help="投稿実績を variant 別に集計する（Phase 2）")
     p.add_argument("--no-metrics", action="store_true", help="X API の指標を取得しない")
     p.set_defaults(func=cmd_report)
+
+    p = sub.add_parser("import-episodes", help="『ハウリング』の見せた記憶を取り込む（Phase 3）")
+    p.add_argument("path", help="アプリの書き出しJSON（[{date, kind:'shown', text}]）")
+    p.set_defaults(func=cmd_import_episodes)
+
+    p = sub.add_parser("export-memory", help="アプリ形式の memory.json を書き出す（Phase 3）")
+    p.add_argument("path", help="書き出し先のパス")
+    p.set_defaults(func=cmd_export_memory)
 
     p = sub.add_parser("drafts", help="下書き一覧")
     p.add_argument("--status", default=None)

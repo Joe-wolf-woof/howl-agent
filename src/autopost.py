@@ -13,6 +13,11 @@ A/B（仮説H1: ペルソナ＋記憶の一貫性が反応率を上げる）:
     "persona" = 記憶文脈＋ペルソナ指示あり（従来どおり）
     "plain"   = 記憶文脈なし・ペルソナ指示なしの素の生成
   テーマも日付ローテーションで決める（曜日や日付に偏らせないため ordinal ベース）。
+
+Phase 3: 投稿前に行動選択レイヤー（selector）が状態を見て今日の一手を選ぶ。
+巡回表のテーマは「既定案」になり、記憶について書く／問いかける／休むも選べる。
+選択は result と下書きに decision として残り、実運用では data/decisions.jsonl
+にも記録される。安全装置（ゲート・フィルタ・上限・キルスイッチ）は不変。
 """
 from __future__ import annotations
 
@@ -23,6 +28,7 @@ from .checker import generate_checked, passes_gate
 from .filters import check_post
 from .generator import make_client
 from .persona import load_persona
+from .selector import decide
 
 MAX_POSTS_PER_DAY = 2
 
@@ -60,6 +66,27 @@ def variant_for_date(day: date) -> str:
     return "persona" if day.toordinal() % 2 == 0 else "plain"
 
 
+def _fetch_recent_metrics() -> dict | None:
+    """知覚: 直近の投稿への反応（public_metrics）を取得する。
+
+    実投稿モード専用。認証情報が無い・API が失敗した場合は静かに None を返す
+    （選択はメトリクスなしでも成立する）。
+    """
+    try:
+        from .adapters.x_api import XApiAdapter
+
+        ids = []
+        for d in store.list_drafts("posted")[-5:]:
+            tid = (d.get("post_result") or {}).get("tweet_id")
+            if tid:
+                ids.append(tid)
+        if not ids:
+            return None
+        return XApiAdapter().public_metrics(ids) or None
+    except Exception:
+        return None
+
+
 def run_autopost(
     *,
     dry_run: bool = False,
@@ -71,6 +98,7 @@ def run_autopost(
     """自動投稿を1回実行し、結果の dict を返す（例外は投げない方針）。
 
     status: "posted"（実投稿した）/ "dry-run"（投稿していない）/
+            "rested"（行動選択で今日は休むと判断。投稿しない）/
             "aborted"（安全装置・チェッカー・フィルタで中止。reason に詳細）
     stub=True のときは生成を StubClient にし、投稿も dry-run 扱いにする
     （検証で実投稿が起きないための二重の安全策）。
@@ -90,14 +118,54 @@ def run_autopost(
         result.update(status="aborted", reason="daily-limit")
         return result
 
-    theme = theme_for_date(persona, day)
+    rotation_theme = theme_for_date(persona, day)
     variant = variant_for_date(day)
-    result.update(theme=theme, variant=variant)
+    result.update(variant=variant)
 
     if client is None:
         client = make_client(stub=stub)
+    simulate = dry_run or stub
+
+    # Phase 3: 行動選択。知覚（反応メトリクス）は実投稿モードのときだけ取得する
+    metrics = None
+    if not simulate:
+        metrics = _fetch_recent_metrics()
+    decision = decide(persona, day, variant, rotation_theme, client, metrics=metrics)
+    result.update(decision=decision)
+    if not simulate:
+        store.append_decision(
+            {
+                "date": day.isoformat(),
+                "variant": variant,
+                "action": decision["action"],
+                "theme": decision["theme"],
+                "reason": decision["reason"],
+                "method": decision["method"],
+                "target": decision.get("target"),
+            }
+        )
+
+    theme = decision["theme"]
+    result["theme"] = theme
+    if decision["action"] == "rest":
+        result.update(status="rested", reason=decision.get("reason") or "rest")
+        return result
+
+    episodes = store.context_episodes(5)
+    directive = None
+    if decision["action"] == "memory" and decision.get("target"):
+        target = decision["target"]
+        fingerprint = (str(target["date"])[:10], str(target["summary"]))
+        if not any(store.episode_fingerprint(e) == fingerprint for e in episodes):
+            episodes = episodes + [
+                {"date": target["date"], "type": "shown", "summary": target["summary"]}
+            ]
+        directive = (
+            f"今日はこの出来事について書くこと。対象の出来事: "
+            f"{target['date']}: {target['summary']}"
+        )
     text, check = generate_checked(
-        persona, theme, store.recent_episodes(5), client, variant=variant
+        persona, theme, episodes, client, variant=variant, directive=directive
     )
     result.update(text=text, check=check)
     if not passes_gate(check, variant):
@@ -119,11 +187,10 @@ def run_autopost(
         return result
 
     draft = store.create_draft(
-        text, theme, persona["version"], variant=variant, check=check
+        text, theme, persona["version"], variant=variant, check=check, decision=decision
     )
     result["draft_id"] = draft["id"]
 
-    simulate = dry_run or stub
     if adapter is None:
         if simulate:
             from .adapters.dryrun import DryRunAdapter

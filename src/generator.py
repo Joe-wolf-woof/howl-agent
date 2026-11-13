@@ -219,17 +219,24 @@ def choose_theme(persona: dict, requested: str | None = None) -> str:
 
 
 def generate_post(
-    persona: dict, theme: str, episodes: list[dict], client, variant: str = "persona"
+    persona: dict,
+    theme: str,
+    episodes: list[dict],
+    client,
+    variant: str = "persona",
+    directive: str | None = None,
 ) -> str:
     """投稿文を生成する。
 
     variant="persona": ペルソナ＋記憶文脈あり（従来どおり）。
     variant="plain": A/B（仮説H1）の対照群。ペルソナ指示も記憶文脈も渡さない素の生成。
+    directive: 行動選択レイヤーからの方針文（Phase 3）。persona variant の
+    プロンプトに「今日の方針」として載せる。plain では使わない。
     """
     if variant == "plain":
         return client.generate(build_plain_system_prompt(), build_plain_user_prompt(theme))
     if variant != "persona":
         raise ValueError(f"unknown variant: {variant}")
     system_prompt = build_system_prompt(persona)
-    user_prompt = build_user_prompt(persona, theme, episodes)
+    user_prompt = build_user_prompt(persona, theme, episodes, directive=directive)
     return client.generate(system_prompt, user_prompt)

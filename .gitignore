@@ -3,3 +3,5 @@ __pycache__/
 data/drafts/
 data/outbox.jsonl
 data/oauth_pending.json
+data/episodes.json
+data/decisions.jsonl
