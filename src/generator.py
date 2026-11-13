@@ -5,8 +5,11 @@ GEMINI_API_KEY から読む。キーが無い環境でもフロー全体を検�
 サンプル文を返す StubClient を用意している（--stub）。
 
 モデルは GEMINI_MODELS（カンマ区切り）で上書き可能。デフォルトは
-gemini-3.5-flash（前作の実績モデル）。404/429/503 では次の候補へ進む
-（前作で確立したフォールバック方針）。
+gemini-3.5-flash → gemini-3-flash-preview → gemini-flash-latest の順に試す。
+404/429/503・タイムアウト・空応答では次の候補へ進む
+（前作で確立したフォールバック方針＋2026-11-13 の実測対応:
+この環境から Gemini API は応答が 0.5 秒〜60 秒超まで大きくばらつくため、
+タイムアウトもフォールバック対象にし、制限時間を 120 秒に置く）。
 """
 from __future__ import annotations
 
@@ -39,7 +42,7 @@ class GeminiClient:
         body = {
             "systemInstruction": {"parts": [{"text": system_prompt}]},
             "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
-            "generationConfig": {"temperature": 0.9, "maxOutputTokens": 300},
+            "generationConfig": {"temperature": 0.9, "maxOutputTokens": 1000},
         }
         last_error: Exception | None = None
         for model in self.models:
@@ -54,15 +57,23 @@ class GeminiClient:
                 method="POST",
             )
             try:
-                with urllib.request.urlopen(req, timeout=60) as resp:
+                with urllib.request.urlopen(req, timeout=120) as resp:
                     data = json.loads(resp.read().decode("utf-8"))
-                text = data["candidates"][0]["content"]["parts"][0]["text"]
-                return text.strip().strip("「」\"")
+                parts = data["candidates"][0]["content"].get("parts", [])
+                text = "".join(p.get("text", "") for p in parts if not p.get("thought")).strip()
+                if not text:
+                    last_error = RuntimeError(f"{model}: empty response")
+                    continue
+                return text.strip("「」\"")
             except urllib.error.HTTPError as e:
                 last_error = e
                 if e.code in FALLBACK_STATUSES:
                     continue
                 raise
+            except (urllib.error.URLError, TimeoutError, KeyError, IndexError) as e:
+                # 応答遅延・接続断・想定外の応答形は次のモデルで再試行する
+                last_error = e
+                continue
         raise RuntimeError(f"Gemini API: all models failed: {last_error}")
 
 
@@ -85,7 +96,7 @@ def make_client(stub: bool = False):
             "GEMINI_API_KEY が未設定です。実生成には環境変数にGemini APIキーを設定してください"
             "（検証だけなら --stub が使えます）"
         )
-    models = [m.strip() for m in os.environ.get("GEMINI_MODELS", "gemini-3.5-flash").split(",") if m.strip()]
+    models = [m.strip() for m in os.environ.get("GEMINI_MODELS", "gemini-3.5-flash,gemini-3-flash-preview,gemini-flash-latest").split(",") if m.strip()]
     return GeminiClient(api_key, models)
 
 
