@@ -27,10 +27,32 @@ from .persona import load_persona
 MAX_POSTS_PER_DAY = 2
 
 
+THEME_CYCLE_SLOTS = 20
+
+
+def theme_cycle(persona: dict) -> list[str]:
+    """テーマ配分（重み）を20日分の巡回パターンに変換する（決定的）。
+
+    Smooth Weighted Round-Robin で重みに比例した回数を均等に散らす。
+    例: psychology 0.6 → 20日中12日、observation 0.2 → 4日。
+    """
+    weights = persona["themes"]
+    total = sum(weights.values())
+    current = {t: 0.0 for t in weights}
+    cycle: list[str] = []
+    for _ in range(THEME_CYCLE_SLOTS):
+        for t in weights:
+            current[t] += weights[t] / total
+        pick = max(weights, key=lambda t: current[t])
+        cycle.append(pick)
+        current[pick] -= 1.0
+    return cycle
+
+
 def theme_for_date(persona: dict, day: date) -> str:
-    """その日のテーマを日付ローテーションで決める（決定的）。"""
-    themes = list(persona["themes"].keys())
-    return themes[day.toordinal() % len(themes)]
+    """その日のテーマを配分どおりの日付ローテーションで決める（決定的）。"""
+    cycle = theme_cycle(persona)
+    return cycle[day.toordinal() % len(cycle)]
 
 
 def variant_for_date(day: date) -> str:

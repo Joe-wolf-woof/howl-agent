@@ -191,6 +191,21 @@ class AutopostTest(StorePhase2Test):
         self.assertEqual(theme_for_date(persona, d0), theme_for_date(persona, d0))
         self.assertNotEqual(variant_for_date(d0), variant_for_date(d0 + timedelta(days=1)))
 
+    def test_theme_cycle_follows_weights(self):
+        from collections import Counter
+
+        from src.autopost import theme_cycle
+
+        persona = load_persona()
+        counts = Counter(theme_cycle(persona))
+        # ペルソナ v0.5 の配分: psychology 60% / observation 20% / seasons 10% / question 5% / events 5%
+        self.assertEqual(counts["psychology"], 12)
+        self.assertEqual(counts["observation"], 4)
+        self.assertEqual(counts["seasons"], 2)
+        self.assertEqual(counts["question"], 1)
+        self.assertEqual(counts["events"], 1)
+        self.assertEqual(sum(counts.values()), 20)
+
     def test_dry_run_posts_nothing_and_records_no_episode(self):
         result = run_autopost(dry_run=True, stub=True, day=date(2026, 11, 14))
         self.assertEqual(result["status"], "dry-run")

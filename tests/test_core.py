@@ -25,7 +25,7 @@ class PersonaTest(unittest.TestCase):
     def test_psychology_is_largest_theme(self):
         themes = self.persona["themes"]
         self.assertEqual(max(themes, key=themes.get), "psychology")
-        self.assertEqual(themes["psychology"], 0.4)
+        self.assertEqual(themes["psychology"], 0.6)
 
     def test_system_prompt_contains_identity(self):
         prompt = build_system_prompt(self.persona)
