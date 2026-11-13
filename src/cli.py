@@ -10,6 +10,16 @@
       （JOEはこの前に .txt を編集して自分の感性を加える）
   python -m src.cli post <id> [--adapter dryrun|x]
       承認済みの下書きを投稿する。デフォルトは dryrun（実投稿しない）。
+
+Phase 2:
+  python -m src.cli check <id> [--stub]
+      既存の下書きを一貫性チェッカーで採点する（5軸×20点、合格80点）。
+  python -m src.cli generate --check [--theme X] [--stub]
+      生成→採点を繰り返し、合格か最良の下書きを保存する。
+  python -m src.cli autopost [--dry-run] [--stub]
+      全自動投稿（Phase B）。安全装置とチェッカー必須。A/B variant は日替わり。
+  python -m src.cli report [--no-metrics]
+      投稿済みエピソードを variant 別に集計し、可能なら X の指標平均も出す。
 """
 from __future__ import annotations
 
@@ -17,31 +27,65 @@ import argparse
 import sys
 
 from . import store
+from .checker import PASS_THRESHOLD, check_draft, generate_checked
 from .config import load_dotenv
 from .filters import check_post
 from .generator import choose_theme, generate_post, make_client
 from .persona import load_persona
 
 
+def _print_check(result: dict) -> None:
+    verdict = "PASS" if result["total"] >= PASS_THRESHOLD else "FAIL"
+    print(
+        f"一貫性チェック: {result['total']}/100 ({result['method']}) {verdict}"
+        f"（合格ライン {PASS_THRESHOLD}）"
+    )
+    for axis, score in result["axes"].items():
+        print(f"  {axis:<8} {score:>2}/20")
+    for reason in result.get("reasons", []):
+        print(f"  - {reason}")
+
+
 def cmd_generate(args) -> int:
     persona = load_persona()
     theme = choose_theme(persona, args.theme)
     client = make_client(stub=args.stub)
-    text = generate_post(persona, theme, store.recent_episodes(5), client)
+    check = None
+    if args.check:
+        text, check = generate_checked(persona, theme, store.recent_episodes(5), client)
+    else:
+        text = generate_post(persona, theme, store.recent_episodes(5), client)
     issues = check_post(text, persona)
-    draft = store.create_draft(text, theme, persona["version"])
+    draft = store.create_draft(text, theme, persona["version"], check=check)
     if issues:
-        drafts = store._load_drafts()
-        for d in drafts:
-            if d["id"] == draft["id"]:
-                d["filter_issues"] = issues
-        store._save_drafts(drafts)
+        store.update_draft(draft["id"], filter_issues=issues)
     print(f"draft {draft['id']} (theme={theme})")
     print(text)
     print(f"編集用ファイル: data/drafts/{draft['id']}.txt")
+    if check is not None:
+        print(f"試行回数: {check.get('attempts', 1)}")
+        _print_check(check)
     if issues:
         print("フィルタ警告: " + " / ".join(issues))
     return 0
+
+
+def cmd_check(args) -> int:
+    persona = load_persona()
+    draft = store.get_draft(args.id)
+    text = store.final_text(draft)
+    client = None
+    if not args.stub:
+        try:
+            client = make_client()
+        except RuntimeError:
+            client = None  # キーがなければルールベース採点にフォールバック
+    result = check_draft(text, draft["theme"], persona, client)
+    store.update_draft(args.id, check=result)
+    print(f"check {draft['id']} (theme={draft['theme']})")
+    print(text)
+    _print_check(result)
+    return 0 if result["total"] >= PASS_THRESHOLD else 1
 
 
 def cmd_drafts(args) -> int:
@@ -142,6 +186,74 @@ def cmd_post(args) -> int:
     return 0
 
 
+def cmd_autopost(args) -> int:
+    from .autopost import run_autopost
+
+    result = run_autopost(dry_run=args.dry_run, stub=args.stub)
+    print(
+        f"autopost {result['date']}: status={result['status']}"
+        + (f" reason={result['reason']}" if result.get("reason") else "")
+    )
+    if result.get("theme"):
+        print(f"theme={result['theme']} variant={result['variant']}")
+    if result.get("check"):
+        _print_check(result["check"])
+    if result.get("text"):
+        print(result["text"])
+    if result.get("filter_issues"):
+        print("フィルタ警告: " + " / ".join(result["filter_issues"]))
+    if result["status"] == "posted":
+        print(f"投稿しました (draft {result['draft_id']})")
+    return 0 if result["status"] in ("posted", "dry-run") else 1
+
+
+def cmd_report(args) -> int:
+    episodes = [e for e in store.load_episodes() if e.get("type") == "post"]
+    by_variant: dict[str, list[dict]] = {}
+    for e in episodes:
+        by_variant.setdefault(e.get("variant") or "phase-a", []).append(e)
+    print(f"投稿済みエピソード: {len(episodes)} 件")
+    for variant, eps in sorted(by_variant.items()):
+        print(f"  {variant}: {len(eps)} 件")
+
+    # X の指標は、実投稿済み下書きの tweet_id がある場合のみ取得を試みる。
+    ids_by_variant: dict[str, list[str]] = {}
+    for d in store.list_drafts("posted"):
+        tweet_id = (d.get("post_result") or {}).get("tweet_id")
+        if tweet_id:
+            ids_by_variant.setdefault(d.get("variant", "persona"), []).append(tweet_id)
+    if not ids_by_variant:
+        print("指標: 実投稿の tweet_id がないため、保存データのみで集計しました")
+        return 0
+    if args.no_metrics:
+        print("指標: --no-metrics のため取得しませんでした")
+        return 0
+    try:
+        from .adapters.x_api import XApiAdapter
+
+        metrics = XApiAdapter().public_metrics(
+            [tid for ids in ids_by_variant.values() for tid in ids]
+        )
+    except Exception as e:  # 認証情報なし・API障害時は保存データのみで劣化
+        print(f"指標: 取得できませんでした（{e}）")
+        return 0
+    if not metrics:
+        print("指標: 取得結果が空でした")
+        return 0
+    print("指標（variant 別平均）:")
+    for variant, ids in sorted(ids_by_variant.items()):
+        rows = [metrics[i] for i in ids if i in metrics]
+        if not rows:
+            continue
+        n = len(rows)
+        avg = lambda key: sum(r.get(key, 0) for r in rows) / n  # noqa: E731
+        print(
+            f"  {variant}: いいね {avg('like_count'):.1f} / 返信 {avg('reply_count'):.1f}"
+            f" / インプレッション {avg('impression_count'):.1f}（{n} 件）"
+        )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="howl-agent", description="ハウル投稿エンジン（Phase A）")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -149,7 +261,22 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("generate", help="投稿案を生成して下書きに保存")
     p.add_argument("--theme", default=None, help="psychology/observation/seasons/question/events")
     p.add_argument("--stub", action="store_true", help="APIキーなしのサンプル生成で検証する")
+    p.add_argument("--check", action="store_true", help="生成後に一貫性チェックし、80点未満なら再生成する（Phase 2）")
     p.set_defaults(func=cmd_generate)
+
+    p = sub.add_parser("check", help="既存の下書きを一貫性チェッカーで採点する（Phase 2）")
+    p.add_argument("id")
+    p.add_argument("--stub", action="store_true", help="LLM採点を使わずルールベースで採点する")
+    p.set_defaults(func=cmd_check)
+
+    p = sub.add_parser("autopost", help="全自動投稿（Phase B、安全装置つき）")
+    p.add_argument("--dry-run", action="store_true", help="実投稿せず dryrun アダプタで内容を確認する")
+    p.add_argument("--stub", action="store_true", help="サンプル生成＋dry-run で検証する")
+    p.set_defaults(func=cmd_autopost)
+
+    p = sub.add_parser("report", help="投稿実績を variant 別に集計する（Phase 2）")
+    p.add_argument("--no-metrics", action="store_true", help="X API の指標を取得しない")
+    p.set_defaults(func=cmd_report)
 
     p = sub.add_parser("drafts", help="下書き一覧")
     p.add_argument("--status", default=None)

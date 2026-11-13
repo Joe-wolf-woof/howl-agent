@@ -74,6 +74,23 @@ def build_system_prompt(persona: dict) -> str:
     return "\n".join(lines)
 
 
+PLAIN_SYSTEM_PROMPT = (
+    "あなたはX（旧Twitter）への投稿文を書くアシスタントです。"
+    "日本語で140字以内の投稿文を1つだけ書いてください。"
+    "出力は投稿文のみ。前置き・解説・引用符は付けないこと。"
+)
+
+
+def build_plain_system_prompt() -> str:
+    """A/B（仮説H1）の対照群用: ペルソナ指示を含まない素のシステムプロンプト。"""
+    return PLAIN_SYSTEM_PROMPT
+
+
+def build_plain_user_prompt(theme: str) -> str:
+    """A/B の対照群用: 記憶文脈もペルソナのテーマ指示も含まないユーザープロンプト。"""
+    return f"テーマ: {theme}\nこのテーマで、Xへの投稿文を1つだけ書いてください。"
+
+
 def build_user_prompt(persona: dict, theme: str, episodes: list[dict]) -> str:
     instruction = persona["theme_instructions"][theme]
     lines = [f"テーマ: {theme}", f"指示: {instruction}"]

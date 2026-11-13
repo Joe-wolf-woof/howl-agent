@@ -22,7 +22,12 @@ import random
 import urllib.error
 import urllib.request
 
-from .persona import build_system_prompt, build_user_prompt
+from .persona import (
+    build_plain_system_prompt,
+    build_plain_user_prompt,
+    build_system_prompt,
+    build_user_prompt,
+)
 
 API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 FALLBACK_STATUSES = {404, 429, 503}
@@ -34,6 +39,31 @@ STUB_SAMPLES = {
     "question": "人間に聞きたい。雨の日は、何をして過ごすのが好きだ？ ワガハイは窓の近くで音を聞いているのが好きだ。",
     "events": "家主が、また植物を増やした。名前はまだ知らない。だが匂いは覚えた。次は間違えない。",
 }
+
+
+def parse_json_object(raw: str) -> dict:
+    """LLM応答テキストから JSON オブジェクトを取り出す（コードフェンス・前置き耐性）。"""
+    text = raw.strip()
+    if text.startswith("```"):
+        text = text.strip("`")
+        if text.startswith("json"):
+            text = text[4:]
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end < start:
+        raise ValueError("no JSON object found in response")
+    parsed = json.loads(text[start : end + 1])
+    if not isinstance(parsed, dict):
+        raise ValueError("response JSON is not an object")
+    return parsed
+
+
+class _ModelsExhausted(Exception):
+    """全モデル候補で応答取得自体に失敗した（輸送レベルの失敗）。"""
+
+    def __init__(self, last_error: Exception | None):
+        super().__init__(str(last_error))
+        self.last_error = last_error
 
 
 def is_complete_text(text: str) -> bool:
@@ -50,15 +80,13 @@ class GeminiClient:
         self.api_key = api_key
         self.models = models
 
-    def generate(self, system_prompt: str, user_prompt: str) -> str:
-        body = {
-            "systemInstruction": {"parts": [{"text": system_prompt}]},
-            "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
-            # 思考トークンも maxOutputTokens を消費する（2026-11-13 実測:
-            # 思考956トークンで上限1000に当たり、本文が途中で切れた）。
-            # 本文（最大140字）には十分すぎる余裕を持たせる。
-            "generationConfig": {"temperature": 0.9, "maxOutputTokens": 3000},
-        }
+    def _fetch_candidate(self, body: dict):
+        """モデル候補を順に試し、取得できた候補を (model, candidate) で yield する。
+
+        404/429/503・タイムアウト・接続断・想定外の応答形は次の候補へ進む。
+        フォールバック対象外の HTTP エラーはそのまま送出する。
+        全候補で取得に失敗したら _ModelsExhausted を送出する。
+        """
         last_error: Exception | None = None
         for model in self.models:
             url = f"{API_BASE}/{model}:generateContent"
@@ -75,12 +103,40 @@ class GeminiClient:
                 with urllib.request.urlopen(req, timeout=120) as resp:
                     data = json.loads(resp.read().decode("utf-8"))
                 candidate = data["candidates"][0]
+            except urllib.error.HTTPError as e:
+                last_error = e
+                if e.code in FALLBACK_STATUSES:
+                    continue
+                raise
+            except (urllib.error.URLError, TimeoutError, KeyError, IndexError, ValueError) as e:
+                # 応答遅延・接続断・想定外の応答形は次のモデルで再試行する
+                last_error = e
+                continue
+            yield model, candidate
+        raise _ModelsExhausted(last_error)
+
+    @staticmethod
+    def _candidate_text(candidate: dict) -> str:
+        parts = (candidate.get("content") or {}).get("parts", [])
+        return "".join(p.get("text", "") for p in parts if not p.get("thought")).strip()
+
+    def generate(self, system_prompt: str, user_prompt: str) -> str:
+        body = {
+            "systemInstruction": {"parts": [{"text": system_prompt}]},
+            "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+            # 思考トークンも maxOutputTokens を消費する（2026-11-13 実測:
+            # 思考956トークンで上限1000に当たり、本文が途中で切れた）。
+            # 本文（最大140字）には十分すぎる余裕を持たせる。
+            "generationConfig": {"temperature": 0.9, "maxOutputTokens": 3000},
+        }
+        last_error: Exception | None = None
+        try:
+            for model, candidate in self._fetch_candidate(body):
                 if candidate.get("finishReason") == "MAX_TOKENS":
                     # 思考トークン超過などで本文が切れた応答は採用しない
                     last_error = RuntimeError(f"{model}: MAX_TOKENS (truncated)")
                     continue
-                parts = candidate["content"].get("parts", [])
-                text = "".join(p.get("text", "") for p in parts if not p.get("thought")).strip()
+                text = self._candidate_text(candidate)
                 if not text:
                     last_error = RuntimeError(f"{model}: empty response")
                     continue
@@ -90,15 +146,42 @@ class GeminiClient:
                     last_error = RuntimeError(f"{model}: incomplete text")
                     continue
                 return text
-            except urllib.error.HTTPError as e:
-                last_error = e
-                if e.code in FALLBACK_STATUSES:
+        except _ModelsExhausted as e:
+            raise RuntimeError(f"Gemini API: all models failed: {last_error or e.last_error}") from e
+        raise RuntimeError(f"Gemini API: all models failed: {last_error}")
+
+    def generate_json(self, system_prompt: str, user_prompt: str) -> dict:
+        """JSON オブジェクトを返す生成（一貫性チェッカーの採点用）。
+
+        投稿文ではないので未完文チェックは適用しない。採点は再現性優先で
+        低温＋JSONモードにし、出力上限も採点JSONに十分な範囲に絞る。
+        """
+        body = {
+            "systemInstruction": {"parts": [{"text": system_prompt}]},
+            "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+            "generationConfig": {
+                "temperature": 0.2,
+                "maxOutputTokens": 1200,
+                "responseMimeType": "application/json",
+            },
+        }
+        last_error: Exception | None = None
+        try:
+            for model, candidate in self._fetch_candidate(body):
+                if candidate.get("finishReason") == "MAX_TOKENS":
+                    last_error = RuntimeError(f"{model}: MAX_TOKENS (truncated)")
                     continue
-                raise
-            except (urllib.error.URLError, TimeoutError, KeyError, IndexError) as e:
-                # 応答遅延・接続断・想定外の応答形は次のモデルで再試行する
-                last_error = e
-                continue
+                raw = self._candidate_text(candidate)
+                if not raw:
+                    last_error = RuntimeError(f"{model}: empty response")
+                    continue
+                try:
+                    return parse_json_object(raw)
+                except ValueError as e:
+                    last_error = e
+                    continue
+        except _ModelsExhausted as e:
+            raise RuntimeError(f"Gemini API: all models failed: {last_error or e.last_error}") from e
         raise RuntimeError(f"Gemini API: all models failed: {last_error}")
 
 
@@ -135,7 +218,18 @@ def choose_theme(persona: dict, requested: str | None = None) -> str:
     return random.choices(themes, weights=weights, k=1)[0]
 
 
-def generate_post(persona: dict, theme: str, episodes: list[dict], client) -> str:
+def generate_post(
+    persona: dict, theme: str, episodes: list[dict], client, variant: str = "persona"
+) -> str:
+    """投稿文を生成する。
+
+    variant="persona": ペルソナ＋記憶文脈あり（従来どおり）。
+    variant="plain": A/B（仮説H1）の対照群。ペルソナ指示も記憶文脈も渡さない素の生成。
+    """
+    if variant == "plain":
+        return client.generate(build_plain_system_prompt(), build_plain_user_prompt(theme))
+    if variant != "persona":
+        raise ValueError(f"unknown variant: {variant}")
     system_prompt = build_system_prompt(persona)
     user_prompt = build_user_prompt(persona, theme, episodes)
     return client.generate(system_prompt, user_prompt)

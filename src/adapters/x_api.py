@@ -66,6 +66,36 @@ class XApiAdapter:
         d = data["data"]
         return {"id": d["id"], "username": d["username"], "name": d["name"]}
 
+    def public_metrics(self, tweet_ids: list[str]) -> dict[str, dict]:
+        """ツイートの public_metrics をまとめて取得する（Phase 2 の測定用）。
+
+        戻り値: {tweet_id: {"like_count": int, "reply_count": int,
+        "impression_count": int, ...}}。取得できなかった ID は含まれない。
+        クエリパラメータは oauth1 側で署名対象に含められる。
+        """
+        result: dict[str, dict] = {}
+        for i in range(0, len(tweet_ids), 100):
+            chunk = [t for t in tweet_ids[i : i + 100] if t]
+            if not chunk:
+                continue
+            url = (
+                "https://api.x.com/2/tweets?ids="
+                + ",".join(chunk)
+                + "&tweet.fields=public_metrics"
+            )
+            req = urllib.request.Request(
+                url, headers={"Authorization": self._auth_header("GET", url)}, method="GET"
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+            except urllib.error.HTTPError as e:
+                body = e.read().decode("utf-8", "replace")[:300]
+                raise RuntimeError(f"X API metrics failed: HTTP {e.code}: {body}") from e
+            for tweet in data.get("data", []):
+                result[tweet["id"]] = tweet.get("public_metrics", {})
+        return result
+
     def post(self, text: str) -> dict:
         # JSON ボディは OAuth 署名の対象パラメータに含めない（仕様通り）
         auth = self._auth_header("POST", TWEETS_URL)

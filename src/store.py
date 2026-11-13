@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import difflib
 import json
+import os
 import uuid
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -23,6 +24,7 @@ DRAFTS_JSONL = DATA / "drafts.jsonl"
 DRAFTS_DIR = DATA / "drafts"
 EPISODES_JSON = DATA / "episodes.json"
 OUTBOX_JSONL = DATA / "outbox.jsonl"
+AUTOPOST_OFF = DATA / "AUTOPOST_OFF"
 
 JST = timezone(timedelta(hours=9))
 
@@ -45,13 +47,23 @@ def _save_drafts(drafts: list[dict]) -> None:
             f.write(json.dumps(d, ensure_ascii=False) + "\n")
 
 
-def create_draft(text: str, theme: str, persona_version: str) -> dict:
+def create_draft(
+    text: str,
+    theme: str,
+    persona_version: str,
+    variant: str = "persona",
+    check: dict | None = None,
+) -> dict:
     draft_id = uuid.uuid4().hex[:8]
     draft = {
         "id": draft_id,
         "created_at": now_iso(),
         "theme": theme,
         "persona_version": persona_version,
+        # Phase 2: A/B（仮説H1）の variant と一貫性チェッカーの結果。
+        # 旧レコードには無いキーだが、読む側は .get で扱うため後方互換。
+        "variant": variant,
+        "check": check,
         "original_text": text,
         "edited_text": None,
         "status": "draft",
@@ -70,6 +82,17 @@ def create_draft(text: str, theme: str, persona_version: str) -> dict:
 def get_draft(draft_id: str) -> dict:
     for d in _load_drafts():
         if d["id"] == draft_id:
+            return d
+    raise KeyError(f"draft not found: {draft_id}")
+
+
+def update_draft(draft_id: str, **fields) -> dict:
+    """下書きの任意フィールドを更新する（check 結果の記録などに使う）。"""
+    drafts = _load_drafts()
+    for d in drafts:
+        if d["id"] == draft_id:
+            d.update(fields)
+            _save_drafts(drafts)
             return d
     raise KeyError(f"draft not found: {draft_id}")
 
@@ -121,6 +144,9 @@ def mark_posted(draft_id: str, result: dict) -> dict:
                     "date": d["posted_at"][:10],
                     "type": "post",
                     "theme": d["theme"],
+                    # Phase 2: A/B 集計用。旧フローで作られた下書きには無い場合がある
+                    "variant": d.get("variant", "persona"),
+                    "check_total": (d.get("check") or {}).get("total"),
                     "summary": f"Xに投稿した: {final_text(d)[:60]}",
                 }
             )
@@ -151,3 +177,25 @@ def append_outbox(record: dict) -> None:
     OUTBOX_JSONL.parent.mkdir(parents=True, exist_ok=True)
     with open(OUTBOX_JSONL, "a", encoding="utf-8") as f:
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+# ---------------------------------------------------------------------------
+# Phase B（全自動投稿）の安全装置
+# ---------------------------------------------------------------------------
+
+def autopost_kill_reason() -> str | None:
+    """キルスイッチが効いていれば理由を返す（"env" / "file"）。なければ None。"""
+    if os.environ.get("HOWL_AUTOPOST", "").lower() == "off":
+        return "env"
+    if AUTOPOST_OFF.exists():
+        return "file"
+    return None
+
+
+def posted_count_on(date_str: str) -> int:
+    """指定日（YYYY-MM-DD）に投稿済みのエピソード数を返す（1日上限の判定用）。"""
+    return sum(
+        1
+        for e in load_episodes()
+        if e.get("type") == "post" and e.get("date") == date_str
+    )

@@ -3,16 +3,18 @@
 WebAR作品『Spatial AI NPC』のオオカミを、独立したAIキャラクター **ハウル** として運用するためのエージェント本体。
 Xで自律発信し、WebARでは同じキャラクターに「会える」——作って終わりではなく、運用と測定までを含むプロジェクトの Phase 1 実装です。
 
-## 現在の状態（Phase 1 / MVP）
+## 現在の状態（Phase 1 + Phase 2）
 
 - ✅ ペルソナエンジン: Big Fiveパラメータ＋行動変換ルールを `persona/persona.json` に外出しし、システムプロンプトへ変換
 - ✅ 投稿生成: Gemini API（モデルフォールバック付き）。APIキーなしでも `--stub` で全フロー検証可能
 - ✅ Phase A フロー（承認＋編集制）: 生成 → 人間が文章を編集 → 承認 → 投稿。編集差分は記録され、将来のペルソナ調整の材料になる
 - ✅ NGフィルタ: 文字数（140字）・URL・NGワードの機械チェック
 - ✅ エピソード記憶: `data/episodes.json` に蓄積し、生成時に参照（投稿すると自動で1件追加）
-- ✅ 配信アダプタ: 疎結合な interface。現在は DryRun（outboxへ記録、実投稿しない）
-- ✅ X APIアダプタ: `POST /2/tweets` を OAuth 1.0a 署名つきで実装済み（署名ロジックは公開テストベクトルで検証）。Xアカウント（@AgentName_Howl）も作成済み。残りは開発者登録と認証情報の設定のみ
-- ⏳ 一貫性チェッカー（LLMによるペルソナ適合スコア）と全自動化・A/B測定は Phase 2
+- ✅ 配信アダプタ: 疎結合な interface。DryRun（outboxへ記録、実投稿しない）と X API の両対応
+- ✅ X APIアダプタ: `POST /2/tweets` を OAuth 1.0a 署名つきで実装済み（署名ロジックは公開テストベクトルで検証）。Xアカウント（@AgentName_Howl）で実投稿の運用中
+- ✅ 一貫性チェッカー（Phase 2）: ペルソナ適合を5軸×20点＝100点で採点（本命は Gemini 採点、キーなし時はルールベースに自動フォールバック）。合格ライン80点
+- ✅ 全自動投稿（Phase 2 / Phase B）: チェッカー80点以上＋NGフィルタ通過が必須。キルスイッチ（環境変数／ファイル）と1日2件上限つき
+- ✅ A/B測定（Phase 2）: variant を日替わりで交互（persona＝記憶＋ペルソナ／plain＝素の生成）に切り替え、下書きとエピソードに記録。`report` で variant 別に集計し、X の public_metrics 平均も取得可能
 
 ## 使い方
 
@@ -30,6 +32,30 @@ python -m src.cli approve <id>
 # 投稿（デフォルトは dry-run：outbox に記録されるだけ）
 python -m src.cli post <id>
 python -m src.cli post <id> --adapter x              # 登録後に有効化
+```
+
+Phase 2 のコマンド:
+
+```bash
+# 既存の下書きを一貫性チェッカーで採点（軸別スコアと合計を表示。結果は下書きに記録される）
+python -m src.cli check <id>                          # Gemini採点（キーなし時はルールベース）
+python -m src.cli check <id> --stub                   # ルールベース採点のみ
+
+# 生成→採点し、80点未満なら再生成（最大で追加2回）。最良の下書きが残る
+python -m src.cli generate --check [--theme psychology] [--stub]
+
+# 全自動投稿（Phase B）: その日のテーマと variant を日付ローテーションで決定し、
+# チェッカー＋NGフィルタを通った場合のみ投稿する
+python -m src.cli autopost --dry-run --stub           # 検証（実投稿しない）
+python -m src.cli autopost                            # 実投稿（X認証情報が必要）
+
+# 止め方（キルスイッチ）: どちらかで autopost は即座に中止する
+HOWL_AUTOPOST=off python -m src.cli autopost
+touch data/AUTOPOST_OFF
+
+# 測定レポート: 投稿済みエピソードを variant 別に集計。
+# 実投稿の tweet_id があり X 認証情報が使える場合は、いいね/返信/インプレッションの平均も出す
+python -m src.cli report [--no-metrics]
 ```
 
 テスト:
