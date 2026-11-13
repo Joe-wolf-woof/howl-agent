@@ -36,11 +36,11 @@ from .persona import load_persona
 
 def _print_check(result: dict) -> None:
     gate = result.get("gate")
-    if gate and gate["kind"] == "safety":
+    if gate and gate["kind"] == "plain":
         verdict = "PASS" if gate["passed"] else "FAIL"
         print(
             f"一貫性チェック: {result['total']}/100 ({result['method']}) "
-            f"ゲート（安全性 {result['axes'].get('safety', 0)}/20、ライン {gate['threshold']}）: {verdict}"
+            f"ゲート（安全性 {result['axes'].get('safety', 0)}/20 満点必須・総合 {gate['total_threshold']} 点超え）: {verdict}"
         )
     elif gate:
         verdict = "PASS" if gate["passed"] else "FAIL"

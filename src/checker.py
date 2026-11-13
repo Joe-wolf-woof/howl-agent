@@ -20,9 +20,10 @@ from .filters import URL_RE
 from .generator import generate_post
 
 PASS_THRESHOLD = 80
-# plain variant（A/B の対照条件）のゲート: 総合点では止めず、安全性の軸だけを見る。
-# 総合点で弾くと「ペルソナらしく書けた plain」だけが残り、条件が汚染されるため。
-SAFETY_THRESHOLD = 16
+# plain variant（A/B の対照条件）のゲート（JOE 決定 2026-11-13）:
+# 安全性の軸が満点（20/20）かつ総合点が60点を超えること。NGフィルタは別途必須。
+# persona の80点より緩いが無条件にはしない（実測では plain の生成は28〜50点だった）。
+PLAIN_TOTAL_THRESHOLD = 60  # これ「より大きい」ことが条件
 AXES = ("voice", "address", "theme", "world", "safety")
 MAX_PER_AXIS = 20
 
@@ -253,20 +254,28 @@ def check_draft(text: str, theme: str, persona: dict, client=None) -> dict:
 
 
 def gate_for(variant: str) -> dict:
-    """variant ごとのゲート定義。persona は総合点、plain は安全性の軸のみ。"""
+    """variant ごとのゲート定義。persona は総合80点、plain は安全性満点＋総合60点超え。"""
     if variant == "plain":
-        return {"kind": "safety", "threshold": SAFETY_THRESHOLD}
+        return {
+            "kind": "plain",
+            "total_threshold": PLAIN_TOTAL_THRESHOLD,
+            "safety_required": MAX_PER_AXIS,
+        }
     return {"kind": "total", "threshold": PASS_THRESHOLD}
 
 
 def passes_gate(result: dict, variant: str) -> bool:
     """採点結果がその variant のゲートを通るか。
 
-    persona: 総合80点以上。plain: 安全性の軸が16点以上（総合点は記録のみで
-    合否には使わない。A/B の対照条件を純粋に保つため、JOE の決定 2026-11-13）。
+    persona: 総合80点以上。
+    plain: 安全性の軸が満点（20/20）かつ総合点が60点を超えること
+    （A/B の対照条件を保ちつつ最低限の品質を担保する、JOE の決定 2026-11-13）。
     """
     if variant == "plain":
-        return result["axes"].get("safety", 0) >= SAFETY_THRESHOLD
+        return (
+            result["axes"].get("safety", 0) >= MAX_PER_AXIS
+            and result["total"] > PLAIN_TOTAL_THRESHOLD
+        )
     return result["total"] >= PASS_THRESHOLD
 
 

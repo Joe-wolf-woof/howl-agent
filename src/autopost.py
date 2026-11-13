@@ -4,8 +4,8 @@ Phase A（承認＋編集制）に対し、Phase B は承認を挟まずに投�
 暴走を防ぐ安全装置を必ず通す:
   - キルスイッチ: 環境変数 HOWL_AUTOPOST=off、または data/AUTOPOST_OFF ファイル
   - 1日2件上限: 当日の投稿済みエピソード数で判定
-  - 一貫性ゲート: persona の日は総合80点以上が必須。plain の日は A/B の条件を
-    純粋に保つため総合点では止めず、安全性の軸16点以上のみ必須（総合点は記録する）
+  - 一貫性ゲート: persona の日は総合80点以上が必須。plain の日は安全性の軸が
+    満点（20/20）かつ総合60点超えが必須（A/B の条件を保ちつつ品質の下限を担保）
   - 既存 NG フィルタ（filters.check_post）も通過必須
 
 A/B（仮説H1: ペルソナ＋記憶の一貫性が反応率を上げる）:
@@ -79,7 +79,15 @@ def run_autopost(
     )
     result.update(text=text, check=check)
     if not passes_gate(check, variant):
-        reason = "safety-failed" if variant == "plain" else "check-failed"
+        if variant == "plain":
+            gate = check.get("gate") or {}
+            reason = (
+                "safety-failed"
+                if check["axes"].get("safety", 0) < gate.get("safety_required", 20)
+                else "gate-failed"
+            )
+        else:
+            reason = "check-failed"
         result.update(status="aborted", reason=reason)
         return result
 

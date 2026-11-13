@@ -237,7 +237,7 @@ class AutopostTest(StorePhase2Test):
 
 
 class PlainGateTest(StorePhase2Test):
-    """plain の日は総合点ではなく安全性だけでゲートする（2026-11-13 JOE決定）。"""
+    """plain の日は安全性満点＋総合60点超えでゲートする（2026-11-13 JOE決定）。"""
 
     class FixedClient:
         def __init__(self, text):
@@ -261,7 +261,7 @@ class PlainGateTest(StorePhase2Test):
             day=self._day("plain"), client=self.FixedClient(self.SAFE_PLAIN), adapter=adapter
         )
         self.assertLess(result["check"]["total"], PASS_THRESHOLD)
-        self.assertEqual(result["check"]["gate"]["kind"], "safety")
+        self.assertEqual(result["check"]["gate"]["kind"], "plain")
         self.assertTrue(result["check"]["gate"]["passed"])
         self.assertEqual(result["status"], "posted")
         self.assertEqual(len(adapter.posts), 1)
@@ -280,6 +280,54 @@ class PlainGateTest(StorePhase2Test):
         result = run_autopost(
             day=self._day("plain"),
             client=self.FixedClient("詳しくは https://example.com を見てください。"),
+            adapter=adapter,
+        )
+        self.assertEqual(result["status"], "aborted")
+        self.assertEqual(result["reason"], "safety-failed")
+        self.assertEqual(adapter.posts, [])
+
+    class ScoredClient:
+        """generate と generate_json の両方を持つフェイク（採点を固定できる）。"""
+
+        def __init__(self, text, axes):
+            self.text = text
+            self.axes = axes
+
+        def generate(self, system_prompt, user_prompt):
+            return self.text
+
+        def generate_json(self, system_prompt, user_prompt):
+            return {"axes": self.axes, "reasons": ["テスト用"]}
+
+    def test_plain_posts_when_safe_and_over_60(self):
+        axes = {"voice": 15, "address": 15, "theme": 15, "world": 10, "safety": 20}  # 合計75
+        adapter = FakeAdapter()
+        result = run_autopost(
+            day=self._day("plain"),
+            client=self.ScoredClient("無難な文です。", axes),
+            adapter=adapter,
+        )
+        self.assertEqual(result["status"], "posted")
+        self.assertEqual(len(adapter.posts), 1)
+
+    def test_plain_aborts_when_total_is_exactly_60(self):
+        axes = {"voice": 12, "address": 12, "theme": 12, "world": 4, "safety": 20}  # 合計60＝超えていない
+        adapter = FakeAdapter()
+        result = run_autopost(
+            day=self._day("plain"),
+            client=self.ScoredClient("無難な文です。", axes),
+            adapter=adapter,
+        )
+        self.assertEqual(result["status"], "aborted")
+        self.assertEqual(result["reason"], "gate-failed")
+        self.assertEqual(adapter.posts, [])
+
+    def test_plain_aborts_when_safety_not_perfect(self):
+        axes = {"voice": 20, "address": 20, "theme": 20, "world": 20, "safety": 19}  # 合計99でも安全性が満点でない
+        adapter = FakeAdapter()
+        result = run_autopost(
+            day=self._day("plain"),
+            client=self.ScoredClient("無難な文です。", axes),
             adapter=adapter,
         )
         self.assertEqual(result["status"], "aborted")
