@@ -27,6 +27,10 @@ Phase 3:
   python -m src.cli export-memory <path>
       中央ストアからアプリ形式の memory.json を書き出す。
       autopost は投稿前に行動選択レイヤーが今日の一手を選ぶようになった。
+  python -m src.cli weekly-review [--days 7] [--stub] [--append-md <path>]
+      週次振り返り（目標駆動）: 直近の投稿・選択・スコア（実モードでは反応も）
+      を集計し、学びと来週の方針を data/reflections.jsonl に記録する。
+      selector は最新の振り返りを翌週の選択に反映する。
 """
 from __future__ import annotations
 
@@ -255,6 +259,49 @@ def cmd_export_memory(args) -> int:
     return 0
 
 
+def cmd_weekly_review(args) -> int:
+    from .review import run_review
+
+    if args.stub:
+        client = make_client(stub=True)
+    else:
+        try:
+            client = make_client()
+        except RuntimeError:
+            client = None  # キーがなければテンプレートで振り返る
+    record = run_review(
+        days=args.days,
+        client=client,
+        fetch_metrics=not args.stub,
+        append_md=args.append_md,
+    )
+    stats = record["stats"]
+    period = record["period"]
+    print(f"weekly-review {period['start']}〜{period['end']}（method={record['method']}）")
+    print(
+        f"投稿: {stats['posts']} 件（variant別: {stats['by_variant']}）"
+        f" / テーマ別: {stats['by_theme']}"
+    )
+    if stats.get("metrics"):
+        m = stats["metrics"]
+        print(
+            f"反応（平均）: いいね {m['like_avg']} / 返信 {m['reply_avg']}"
+            f" / インプレッション {m['impression_avg']}（{m['count']} 件）"
+        )
+    if stats["decisions"]:
+        print(f"行動選択: {stats['decisions']}")
+    if stats["avg_check_score"] is not None:
+        print(f"チェッカー平均: {stats['avg_check_score']} 点")
+    print("学び:")
+    for item in record["learnings"]:
+        print(f"  - {item}")
+    print(f"来週の方針: {record['policy']}")
+    print("data/reflections.jsonl に記録しました")
+    if args.append_md:
+        print(f"{args.append_md} にも追記しました")
+    return 0
+
+
 def cmd_report(args) -> int:
     episodes = [e for e in store.load_episodes() if e.get("type") == "post"]
     by_variant: dict[str, list[dict]] = {}
@@ -333,6 +380,12 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("export-memory", help="アプリ形式の memory.json を書き出す（Phase 3）")
     p.add_argument("path", help="書き出し先のパス")
     p.set_defaults(func=cmd_export_memory)
+
+    p = sub.add_parser("weekly-review", help="週次振り返りを記録する（目標駆動）")
+    p.add_argument("--days", type=int, default=7, help="対象期間の日数（既定7）")
+    p.add_argument("--stub", action="store_true", help="モデルを使わずテンプレートで振り返る")
+    p.add_argument("--append-md", default=None, help="振り返りを追記する Markdown ファイル")
+    p.set_defaults(func=cmd_weekly_review)
 
     p = sub.add_parser("drafts", help="下書き一覧")
     p.add_argument("--status", default=None)

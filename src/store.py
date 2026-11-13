@@ -25,6 +25,7 @@ DRAFTS_DIR = DATA / "drafts"
 EPISODES_JSON = DATA / "episodes.json"
 OUTBOX_JSONL = DATA / "outbox.jsonl"
 DECISIONS_JSONL = DATA / "decisions.jsonl"
+REFLECTIONS_JSONL = DATA / "reflections.jsonl"
 AUTOPOST_OFF = DATA / "AUTOPOST_OFF"
 
 JST = timezone(timedelta(hours=9))
@@ -265,6 +266,20 @@ def load_decisions() -> list[dict]:
     if not DECISIONS_JSONL.exists():
         return []
     with open(DECISIONS_JSONL, encoding="utf-8") as f:
+        return [json.loads(line) for line in f if line.strip()]
+
+
+def append_reflection(record: dict) -> None:
+    """週次振り返り（weekly-review）の記録を data/reflections.jsonl に1行追記する。"""
+    REFLECTIONS_JSONL.parent.mkdir(parents=True, exist_ok=True)
+    with open(REFLECTIONS_JSONL, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def load_reflections() -> list[dict]:
+    if not REFLECTIONS_JSONL.exists():
+        return []
+    with open(REFLECTIONS_JSONL, encoding="utf-8") as f:
         return [json.loads(line) for line in f if line.strip()]
 
 

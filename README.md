@@ -17,6 +17,7 @@ Xで自律発信し、WebARでは同じキャラクターに「会える」—�
 - ✅ A/B測定（Phase 2）: variant を日替わりで交互（persona＝記憶＋ペルソナ／plain＝素の生成）に切り替え、下書きとエピソードに記録。`report` で variant 別に集計し、X の public_metrics 平均も取得可能
 - ✅ 記憶の統合（Phase 3）: ARアプリ『ハウリング』の「見せた記憶」を `import-episodes` で中央の記憶へ取り込み（冪等）、生成文脈では「見せてもらった物」として優先的に参照。逆方向は `export-memory` でアプリ形式の memory.json を書き出し
 - ✅ 行動選択レイヤー（Phase 3）: 投稿前に状態（記憶・投稿履歴・テーマの間隔・継続目標・直近の反応）を見て、今日の一手（記憶について書く／巡回表のテーマ／問いかけ／休む）を選択。判断は下書きと `data/decisions.jsonl` に記録される
+- ✅ 目標駆動（Phase 3）: 継続目標を3件（learn／circulate／structure）に置き換え。`weekly-review` が直近7日の運用を集計して学びと来週の方針を `data/reflections.jsonl` に記録し、selector は最新の振り返り（learnings）と目標の進捗を翌週の選択に反映する
 
 ## 使い方
 
@@ -65,6 +66,11 @@ python -m src.cli import-episodes howling-episodes.json
 
 # 中央ストアからアプリ形式の memory.json を書き出す（posts / episodes / updatedAt）
 python -m src.cli export-memory ../howling/data/memory.json
+
+# 週次振り返り（目標駆動）: 直近7日の投稿・選択・スコア（実モードでは反応も）を
+# 集計し、学びと来週の方針を data/reflections.jsonl に記録する。
+# --append-md で Markdown（運用の学びノート）にもセクションを追記できる
+python -m src.cli weekly-review [--days 7] [--stub] [--append-md learnings.md]
 ```
 
 ### Phase 3: 行動選択レイヤー（編集長）
@@ -72,11 +78,28 @@ python -m src.cli export-memory ../howling/data/memory.json
 Phase B までの autopost は「日付ローテーションで決めたテーマで書く」だけだった。
 Phase 3 からは投稿前に `src/selector.py` が現在の状態を見て今日の一手を選ぶ:
 
-- **状態**: 直近のエピソード（見せてもらった物を含む）、直近の投稿とテーマ別の間隔、巡回表の今日の候補、継続目標（`data/goals.json`:「週に一度は見せてもらった物について書く」「問いかけは週に1〜2回まで」）の進捗、実投稿モードでは直近投稿の反応メトリクス
+- **状態**: 直近のエピソード（見せてもらった物を含む）、直近の投稿とテーマ別の間隔、巡回表の今日の候補、継続目標（`data/goals.json` の3件。下記「目標駆動」参照）の進捗、最新の週次振り返り（learnings）、実投稿モードでは直近投稿の反応メトリクス
 - **選択肢**: `memory`（記憶にある出来事について書く）／`theme`（巡回表のテーマ＝既定案）／`question`（人間に問いかける）／`rest`（今日は休む。投稿もエピソードも残らない）
-- **実装**: 本命は Gemini の JSON 選択、失敗時はルールベース（3日以内の未投稿の「見せた記憶」があれば memory、なければ theme）
+- **実装**: 本命は Gemini の JSON 選択、失敗時はルールベース（3日以内の未投稿の「見せた記憶」があれば memory、無くても未投稿のまま4日以上経過した記憶があれば循環目標のため memory を優先、それ以外は theme）
 - **A/B の保全**: plain の日は状態からエピソード本文とペルソナ情報を一切含めず（件数と日付だけ）、選択肢も theme / question / rest のみ
 - **記録**: 選択は結果と下書きの `decision` に残り、実運用では `data/decisions.jsonl` にも1行ずつ追記される。安全装置（ゲート・NGフィルタ・上限・キルスイッチ）は Phase 2 のまま
+
+### 目標駆動：3つの継続目標と週次振り返り
+
+ハウルの行動選択は、`data/goals.json` の3つの継続目標を判断材料にする。X運用（反応と継続）とポートフォリオ（仮説検証の実証）の両方に効くよう設計した:
+
+| id | 目標 | 進捗の測り方（selector の状態） |
+|---|---|---|
+| learn | 毎週、反応の良かったテーマと書き方を振り返り、翌週の選び方に反映する | 最後の振り返りからの日数と、方針の有無。最新の振り返り（policy＋学び上位3件）は `learnings` として状態に入る |
+| circulate | ARで見せてもらった物を投稿に変え、投稿をアプリの挨拶に返す循環を絶やさない | 未投稿の「見せた記憶」の件数と最古の経過日数、循環の成立回数（見せた日から7日以内に、その記憶を対象に投稿できた場合に成立）と最終成立日 |
+| structure | 週に一度、運用で分かったことを短い要約として記録する | `data/reflections.jsonl` の件数と最終記録日 |
+
+`weekly-review`（`src/review.py`）が structure と learn の実践になる:
+
+- 直近7日（`--days` で変更可）の投稿エピソードを variant別・テーマ別に集計し、`decisions.jsonl` から行動選択の内訳、下書きから一貫性チェッカーの平均を出す。実モード（`--stub` でない）ときは X の public_metrics から直近投稿の反応平均も取得する（失敗したら静かに省略）
+- 学び（learnings）と来週の方針（policy）は Gemini の JSON 生成が本命。使えない場合は数値からテンプレートで組み立てる（記録には method が残る）
+- 記録は `data/reflections.jsonl` に1行ずつ追記され（git管理外）、`--append-md <path>` で Markdown ノートにも週次セクションを追記できる
+- A/B の保全は selector と同じ: plain の日の状態には目標文や学びの本文は含めず、件数だけを渡す
 
 テスト:
 

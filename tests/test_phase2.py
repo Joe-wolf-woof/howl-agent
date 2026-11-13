@@ -156,13 +156,14 @@ class StorePhase2Test(unittest.TestCase):
         root = Path(self.tmp.name)
         self._orig = {
             name: getattr(store, name)
-            for name in ("DRAFTS_JSONL", "DRAFTS_DIR", "EPISODES_JSON", "OUTBOX_JSONL", "DECISIONS_JSONL", "AUTOPOST_OFF")
+            for name in ("DRAFTS_JSONL", "DRAFTS_DIR", "EPISODES_JSON", "OUTBOX_JSONL", "DECISIONS_JSONL", "REFLECTIONS_JSONL", "AUTOPOST_OFF")
         }
         store.DRAFTS_JSONL = root / "drafts.jsonl"
         store.DRAFTS_DIR = root / "drafts"
         store.EPISODES_JSON = root / "episodes.json"
         store.OUTBOX_JSONL = root / "outbox.jsonl"
         store.DECISIONS_JSONL = root / "decisions.jsonl"
+        store.REFLECTIONS_JSONL = root / "reflections.jsonl"
         store.AUTOPOST_OFF = root / "AUTOPOST_OFF"
         os.environ.pop("HOWL_AUTOPOST", None)
 

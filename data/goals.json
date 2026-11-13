@@ -1,1 +1,1 @@
-{"goals":[{"id":"memory-post-weekly","kind":"memory_weekly","text":"週に一度は、見せてもらった物について書く"},{"id":"question-weekly-window","kind":"question_weekly","max":2,"min":1,"text":"人間への問いかけは週に1〜2回まで"}]}
+{"goals":[{"id":"learn","kind":"learn_weekly","text":"毎週、反応の良かったテーマと書き方を振り返り、翌週の選び方に反映する"},{"id":"circulate","kind":"circulate","text":"ARで見せてもらった物を投稿に変え、投稿をアプリの挨拶に返す循環を絶やさない"},{"id":"structure","kind":"structure_weekly","text":"週に一度、運用で分かったことを短い要約として記録する"}]}

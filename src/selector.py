@@ -13,6 +13,11 @@ Phase B までの autopost は「日付ローテーションで決めたテー�
 フォールバックする。variant="plain"（A/B の対照群）の日は、状態から
 エピソード本文とペルソナ情報を一切含めず（件数と日付だけ）、選択肢も
 theme / question / rest のみとする（対照条件を汚染しないため）。
+
+目標駆動: 継続目標（data/goals.json の learn / circulate / structure）に
+対する進捗（goal_progress）と、週次振り返り（weekly-review）の最新結果
+（learnings: 学びと来週の方針）を persona 側の状態に含め、選択の判断
+材料にする。plain 側には目標文や学びの本文は渡さず、件数だけを渡す。
 """
 from __future__ import annotations
 
@@ -28,6 +33,7 @@ GOALS_PATH = ROOT / "data" / "goals.json"
 ACTIONS_PERSONA = ("memory", "theme", "question", "rest")
 ACTIONS_PLAIN = ("theme", "question", "rest")
 MEMORY_FRESH_DAYS = 3  # ルール選択で「新しい見せてもらった物」とみなす日数
+STALE_SHOWN_DAYS = 4  # 未投稿のまま この日数以上経過した shown は循環目標のため優先する
 
 
 def load_goals(path: Path = GOALS_PATH) -> list[dict]:
@@ -51,18 +57,93 @@ def _days_since(day: date, value) -> int | None:
     return (day - d).days if d else None
 
 
-def _goal_progress(goals: list[dict], posts: list[dict], day: date) -> list[dict]:
-    """継続目標ごとの簡単な進捗を計算する。"""
+def _latest_learnings(reflections: list[dict]) -> dict | None:
+    """最新の週次振り返りから、選択の判断材料（方針＋学び上位3件）を抜く。"""
+    if not reflections:
+        return None
+    last = reflections[-1]
+    return {
+        "date": last.get("date"),
+        "policy": last.get("policy"),
+        "learnings": [str(x) for x in (last.get("learnings") or [])][:3],
+    }
+
+
+def _circulate_progress(shown: list[dict], posts: list[dict], day: date) -> dict:
+    """目標 circulate の進捗: 未投稿 shown の滞留と、循環の成立回数。
+
+    循環の成立 = shown のフィンガープリントと一致する target を持つ投稿が、
+    shown の日から7日以内にあること。
+    """
+    posted_targets = _posted_targets(posts)
+    unposted = [
+        e for e in shown if store.episode_fingerprint(e) not in posted_targets
+    ]
+    ages = [
+        age
+        for age in (_days_since(day, e.get("date")) for e in unposted)
+        if age is not None and age >= 0
+    ]
+    shown_dates = {
+        store.episode_fingerprint(e): _parse_day(e.get("date")) for e in shown
+    }
+    cycles = 0
+    last_cycle: str | None = None
+    for e in posts:
+        target = e.get("target") or {}
+        if not (target.get("date") and target.get("summary")):
+            continue
+        fp = (str(target["date"])[:10], str(target["summary"]))
+        shown_day = shown_dates.get(fp)
+        post_day = _parse_day(e.get("date"))
+        if shown_day is None or post_day is None:
+            continue
+        if 0 <= (post_day - shown_day).days <= 7:
+            cycles += 1
+            post_date = str(e.get("date"))[:10]
+            if last_cycle is None or post_date > last_cycle:
+                last_cycle = post_date
+    return {
+        "unposted_shown_count": len(unposted),
+        "oldest_unposted_shown_days": max(ages) if ages else None,
+        "cycles_completed": cycles,
+        "last_cycle_date": last_cycle,
+    }
+
+
+def _goal_progress(
+    goals: list[dict],
+    episodes: list[dict],
+    posts: list[dict],
+    day: date,
+    reflections: list[dict],
+) -> list[dict]:
+    """継続目標ごとの進捗を計算する（目標は data/goals.json の3件が現行）。"""
+    shown = [e for e in episodes if e.get("type") == "shown"]
     progress = []
     for goal in goals:
         entry = {"id": goal.get("id"), "text": goal.get("text")}
+        gid = goal.get("id")
         kind = goal.get("kind")
-        if kind == "memory_weekly":
+        if gid == "learn" or kind == "learn_weekly":
+            last = reflections[-1] if reflections else None
+            entry["days_since_reflection"] = (
+                _days_since(day, last.get("date")) if last else None
+            )
+            entry["has_policy"] = bool(last and last.get("policy"))
+        elif gid == "circulate" or kind == "circulate":
+            entry.update(_circulate_progress(shown, posts, day))
+        elif gid == "structure" or kind == "structure_weekly":
+            entry["reflections_count"] = len(reflections)
+            entry["last_reflection_date"] = (
+                reflections[-1].get("date") if reflections else None
+            )
+        elif kind == "memory_weekly":  # 旧目標（〜2026-11-13）との互換
             memory_posts = [e for e in posts if e.get("action") == "memory"]
             last = memory_posts[-1].get("date") if memory_posts else None
             entry["last_memory_post_date"] = last
             entry["days_since_memory_post"] = _days_since(day, last)
-        elif kind == "question_weekly":
+        elif kind == "question_weekly":  # 旧目標との互換
             entry["question_posts_last_7d"] = sum(
                 1
                 for e in posts
@@ -89,6 +170,7 @@ def build_state(
     episodes = store.load_episodes()
     posts = [e for e in episodes if e.get("type") == "post"]
     shown = [e for e in episodes if e.get("type") == "shown"]
+    reflections = store.load_reflections()
 
     theme_days_since: dict[str, int | None] = {}
     for theme in persona["themes"]:
@@ -118,6 +200,8 @@ def build_state(
             if e.get("theme") == "question"
             and (_days_since(day, e.get("date")) or 99) < 7
         )
+        # 目標まわりも数値だけ（目標文・学びの本文は渡さない）
+        state["reflections_count"] = len(reflections)
     else:
         state["recent_episodes"] = [
             {"date": e.get("date"), "type": e.get("type"), "summary": e.get("summary", "")}
@@ -132,7 +216,8 @@ def build_state(
             }
             for i, e in enumerate(shown[-5:])
         ]
-        state["goals"] = _goal_progress(goals, posts, day)
+        state["goals"] = _goal_progress(goals, episodes, posts, day, reflections)
+        state["learnings"] = _latest_learnings(reflections)
     if metrics:
         state["recent_metrics"] = [
             {
@@ -175,10 +260,32 @@ def fresh_shown_episode(day: date, max_age: int = MEMORY_FRESH_DAYS) -> dict | N
 # ルールベース選択（フォールバック）
 # ---------------------------------------------------------------------------
 
+def _stale_shown_episode(day: date, min_age: int = STALE_SHOWN_DAYS) -> dict | None:
+    """min_age 日以上経過した未投稿 shown のうち、最も古いものを返す。"""
+    episodes = store.load_episodes()
+    posts = [e for e in episodes if e.get("type") == "post"]
+    posted = _posted_targets(posts)
+    best: dict | None = None
+    best_age = -1
+    for e in episodes:
+        if e.get("type") != "shown":
+            continue
+        age = _days_since(day, e.get("date"))
+        if age is None or age < min_age:
+            continue
+        if store.episode_fingerprint(e) in posted:
+            continue
+        if age > best_age:
+            best, best_age = e, age
+    return best
+
+
 def decide_with_rules(state: dict, day: date, variant: str) -> dict:
     """決定的なルール選択。
 
-    persona: 3日以内の未投稿 shown があれば memory、なければ theme。
+    persona: 3日以内の未投稿 shown があれば memory。無くても、未投稿のまま
+    4日以上経過した shown があれば循環目標（circulate）のため memory を
+    優先する。どちらも無ければ theme。
     plain: 常に theme（本文を見ない対照群のため）。
     """
     rotation = state["rotation_theme"]
@@ -193,6 +300,18 @@ def decide_with_rules(state: dict, day: date, variant: str) -> dict:
                 "target": {
                     "date": str(fresh.get("date", ""))[:10],
                     "summary": fresh.get("summary", ""),
+                },
+            }
+        stale = _stale_shown_episode(day)
+        if stale is not None:
+            return {
+                "action": "memory",
+                "theme": rotation,
+                "reason": f"{stale.get('date')} に見せてもらった物が長く投稿に使われていないため（循環の目標を優先）",
+                "method": "rules",
+                "target": {
+                    "date": str(stale.get("date", ""))[:10],
+                    "summary": stale.get("summary", ""),
                 },
             }
     return {
@@ -238,7 +357,8 @@ def _selection_prompts(state: dict, variant: str) -> tuple[str, str]:
         "- theme: rotation_theme（巡回表の候補）で書く\n"
         "- question: 人間への問いかけを書く\n"
         "- rest: 今日は投稿しない\n"
-        "継続目標（goals）の進捗も判断材料にすること。JSONのみで答えてください。"
+        "継続目標（goals）の進捗と、週次振り返り（learnings: 学びと来週の方針）も"
+        "判断材料にし、方針がある場合は尊重すること。JSONのみで答えてください。"
     )
     return system, user
 

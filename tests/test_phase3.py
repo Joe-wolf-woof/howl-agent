@@ -34,6 +34,7 @@ class StorePhase3Test(unittest.TestCase):
                 "EPISODES_JSON",
                 "OUTBOX_JSONL",
                 "DECISIONS_JSONL",
+                "REFLECTIONS_JSONL",
                 "AUTOPOST_OFF",
             )
         }
@@ -42,6 +43,7 @@ class StorePhase3Test(unittest.TestCase):
         store.EPISODES_JSON = root / "episodes.json"
         store.OUTBOX_JSONL = root / "outbox.jsonl"
         store.DECISIONS_JSONL = root / "decisions.jsonl"
+        store.REFLECTIONS_JSONL = root / "reflections.jsonl"
         store.AUTOPOST_OFF = root / "AUTOPOST_OFF"
         os.environ.pop("HOWL_AUTOPOST", None)
 
@@ -170,9 +172,25 @@ class SelectorRulesTest(StorePhase3Test):
         self.assertEqual(decision["action"], "theme")
 
     def test_old_shown_selects_theme(self):
+        # 目標駆動の導入で仕様変更: 未投稿のまま4日以上経過した shown は
+        # 循環目標（circulate）のため memory を優先するようになった。
+        # もとの「古い shown は theme」という期待は
+        # test_goals.SelectorGoalsTest.test_stale_shown_prioritized_for_circulate
+        # で新しい期待に置き換えた。ここでは「投稿済みの古い shown は
+        # 対象にしない」ことを確認する。
         old = (self.day - timedelta(days=5)).isoformat()
         store.add_episode(
             {"date": old, "type": "shown", "kind": "shown", "summary": SHOWN_TEXT}
+        )
+        store.add_episode(
+            {
+                "date": (self.day - timedelta(days=4)).isoformat(),
+                "type": "post",
+                "theme": "psychology",
+                "action": "memory",
+                "target": {"date": old, "summary": SHOWN_TEXT},
+                "summary": "Xに投稿した: ポトスのこと",
+            }
         )
         self.assertEqual(self._decide()["action"], "theme")
 
