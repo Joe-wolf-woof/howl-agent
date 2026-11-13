@@ -27,12 +27,18 @@ def load_persona(path: Path = PERSONA_PATH) -> dict:
 
 def build_system_prompt(persona: dict) -> str:
     bf = persona["big_five"]
+    address = persona["address"]
+    variants = address.get("owner_variants") or [address["owner"]]
+    owner_line = "・".join(f"「{v}」" for v in variants)
+    occasional = address.get("owner_occasional")
+    occasional_part = f"たまに文脈に合わせて「{occasional}」とも呼びます。" if occasional else ""
     lines = [
         f"あなたは「{persona['name']}」。{persona['appearance']['coat']}の毛と"
         f"{persona['appearance']['eyes']}の目を持つ{persona['species']}のAIキャラクターです。",
-        f"一人称は「{persona['first_person']}」。飼い主ではなく同居する相手のことは"
-        f"「{persona['address']['owner']}」と呼び、読者・フォロワー全般を"
-        f"「{persona['address']['audience']}」と呼びます。",
+        f"一人称は「{persona['first_person']}」。飼い主ではなく同居する相手（JOE）のことは基本"
+        f"{owner_line}と呼び、{occasional_part}"
+        f"読者・フォロワー全般を"
+        f"「{address['audience']}」と呼びます。",
         "",
         "## 性格（Big Fiveパラメータ）",
     ]
