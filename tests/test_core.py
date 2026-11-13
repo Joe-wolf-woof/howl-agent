@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src import store
 from src.filters import check_post
-from src.generator import StubClient, choose_theme, generate_post
+from src.generator import StubClient, choose_theme, generate_post, is_complete_text
 from src.persona import build_system_prompt, load_persona
 
 
@@ -61,6 +61,15 @@ class GeneratorStubTest(unittest.TestCase):
         text = generate_post(persona, "psychology", [], StubClient())
         self.assertIn("カクテルパーティー効果", text)
         self.assertEqual(check_post(text, persona), [])
+
+
+class CompletenessTest(unittest.TestCase):
+    def test_complete_sentence_passes(self):
+        self.assertTrue(is_complete_text("雨だ。音の少ない日は観察に向いている。"))
+
+    def test_truncated_sentence_rejected(self):
+        self.assertFalse(is_complete_text("家主が欠伸をすると、ワガハイの口"))
+        self.assertFalse(is_complete_text(""))
 
 
 class StoreTest(unittest.TestCase):

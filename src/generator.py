@@ -10,6 +10,9 @@ gemini-3.5-flash → gemini-3-flash-preview → gemini-flash-latest の順に試
 （前作で確立したフォールバック方針＋2026-11-13 の実測対応:
 この環境から Gemini API は応答が 0.5 秒〜60 秒超まで大きくばらつくため、
 タイムアウトもフォールバック対象にし、制限時間を 120 秒に置く）。
+同じく 2026-11-13 の実測で、思考トークン（実測956）が maxOutputTokens を
+食い潰し本文が途中で切れる事象を確認したため、上限を 3000 に引き上げ、
+finishReason=MAX_TOKENS と文末で終わらない未完文は採用せず次候補へ進む。
 """
 from __future__ import annotations
 
@@ -33,6 +36,15 @@ STUB_SAMPLES = {
 }
 
 
+def is_complete_text(text: str) -> bool:
+    """投稿文として完結しているか（文末で終わっているか）の簡易判定。
+
+    2026-11-13 に「家主が欠伸をすると、ワガハイの口」のような未完文が
+    下書きに保存される事象があったため、生成の採用条件に加えた。
+    """
+    return bool(text) and text.rstrip()[-1] in "。！？"
+
+
 class GeminiClient:
     def __init__(self, api_key: str, models: list[str]):
         self.api_key = api_key
@@ -42,7 +54,10 @@ class GeminiClient:
         body = {
             "systemInstruction": {"parts": [{"text": system_prompt}]},
             "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
-            "generationConfig": {"temperature": 0.9, "maxOutputTokens": 1000},
+            # 思考トークンも maxOutputTokens を消費する（2026-11-13 実測:
+            # 思考956トークンで上限1000に当たり、本文が途中で切れた）。
+            # 本文（最大140字）には十分すぎる余裕を持たせる。
+            "generationConfig": {"temperature": 0.9, "maxOutputTokens": 3000},
         }
         last_error: Exception | None = None
         for model in self.models:
@@ -59,12 +74,22 @@ class GeminiClient:
             try:
                 with urllib.request.urlopen(req, timeout=120) as resp:
                     data = json.loads(resp.read().decode("utf-8"))
-                parts = data["candidates"][0]["content"].get("parts", [])
+                candidate = data["candidates"][0]
+                if candidate.get("finishReason") == "MAX_TOKENS":
+                    # 思考トークン超過などで本文が切れた応答は採用しない
+                    last_error = RuntimeError(f"{model}: MAX_TOKENS (truncated)")
+                    continue
+                parts = candidate["content"].get("parts", [])
                 text = "".join(p.get("text", "") for p in parts if not p.get("thought")).strip()
                 if not text:
                     last_error = RuntimeError(f"{model}: empty response")
                     continue
-                return text.strip("「」\"")
+                text = text.strip("「」\"")
+                if not is_complete_text(text):
+                    # 文の途中で終わっている応答は未完として次の候補へ
+                    last_error = RuntimeError(f"{model}: incomplete text")
+                    continue
+                return text
             except urllib.error.HTTPError as e:
                 last_error = e
                 if e.code in FALLBACK_STATUSES:
