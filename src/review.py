@@ -7,7 +7,7 @@ selector は最新の reflection を状態（learnings）として読み、翌�
 
 集計対象:
   - 投稿エピソード: variant 別・テーマ別の件数
-  - decisions.jsonl: 行動選択（memory/theme/question/rest）の内訳
+  - decisions.jsonl: 行動選択（memory/theme/question、旧データには rest も）の内訳
   - 下書き: 一貫性チェッカーのスコア平均
   - 反応: 実モードのときだけ X の public_metrics（失敗したら静かに省略）
 

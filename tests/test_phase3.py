@@ -263,26 +263,37 @@ class PlainPrivacyTest(StorePhase3Test):
         self.assertNotIn("memory", joined.split("action")[0])  # 選択肢に memory が無い
 
 
-class AutopostRestTest(StorePhase3Test):
-    class RestClient:
+class SelectorRestRejectedTest(StorePhase3Test):
+    """2026-11-14 の決定: 毎日最低1件投稿するため rest は選択肢から外した。
+
+    モデルが rest を返しても検証で弾かれ、ルールベースへフォールバックして
+    投稿する手（theme/memory/question）が選ばれることを確認する。
+    """
+
+    class RestJsonClient:
+        def __init__(self):
+            self.prompts = []
+
         def generate_json(self, system_prompt, user_prompt):
+            self.prompts.append(system_prompt + "\n" + user_prompt)
             return {"action": "rest", "reason": "今日は静かに過ごす"}
 
-        def generate(self, system_prompt, user_prompt):
-            raise AssertionError("rest の日に生成が呼ばれてはいけない")
+    def test_rest_is_not_an_allowed_action(self):
+        from src.selector import ACTIONS_PERSONA, ACTIONS_PLAIN
 
-    def test_rest_posts_nothing_and_records_no_episode(self):
+        self.assertNotIn("rest", ACTIONS_PERSONA)
+        self.assertNotIn("rest", ACTIONS_PLAIN)
+
+    def test_model_rest_falls_back_to_rules_and_posts(self):
+        persona = load_persona()
         day = self._day("persona")
-        adapter = FakeAdapter()
-        result = run_autopost(day=day, client=self.RestClient(), adapter=adapter)
-        self.assertEqual(result["status"], "rested")
-        self.assertEqual(result["decision"]["action"], "rest")
-        self.assertEqual(adapter.posts, [])
-        self.assertEqual(store.load_episodes(), [])
-        self.assertEqual(store.list_drafts(), [])
-        decisions = store.load_decisions()
-        self.assertEqual(len(decisions), 1)
-        self.assertEqual(decisions[0]["action"], "rest")
+        client = self.RestJsonClient()
+        decision = decide(persona, day, "persona", "psychology", client)
+        self.assertNotEqual(decision["action"], "rest")
+        self.assertEqual(decision["action"], "theme")
+        self.assertEqual(decision["method"], "rules")
+        joined = "\n".join(client.prompts)
+        self.assertNotIn("rest", joined)  # プロンプトにも rest を提示しない
 
 
 class AutopostDecisionRecordTest(StorePhase3Test):

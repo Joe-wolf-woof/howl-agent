@@ -285,13 +285,16 @@ def generate_checked(
     episodes: list[dict],
     client,
     variant: str = "persona",
-    max_attempts: int = 3,
+    max_attempts: int = 10,
     directive: str | None = None,
 ) -> tuple[str, dict]:
     """生成→採点を繰り返し、ゲート合格か最良の下書きを返す。
 
-    最大 max_attempts 回（既定3回＝初回＋再生成2回）まで生成し、
-    ゲートを通ったら即座に打ち切る。最良の選び方は variant 依存で、
+    最大 max_attempts 回（既定10回＝初回＋再生成9回）まで生成し、
+    ゲートを通ったら即座に打ち切る。既定値は 2026-11-14 の JOE の決定
+    （毎日最低1件は投稿する運用）で 3 から 10 に引き上げた。特に plain は
+    実測スコアが低く（28〜50点）、試行回数がそのまま投稿成立率になる。
+    最良の選び方は variant 依存で、
     persona は総合点、plain は安全性（同点なら総合点）で選ぶ。
     戻り値の check には attempts と gate（種別・閾値・合否）を含む。
     """

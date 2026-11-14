@@ -93,6 +93,13 @@ class GeminiCheckerTest(unittest.TestCase):
 
 
 class GenerateCheckedTest(unittest.TestCase):
+    def test_default_max_attempts_is_10(self):
+        # 2026-11-14 の決定（毎日最低1件投稿）で 3 から 10 に引き上げた
+        import inspect
+
+        default = inspect.signature(generate_checked).parameters["max_attempts"].default
+        self.assertEqual(default, 10)
+
     def test_stub_passes_on_first_attempt(self):
         persona = load_persona()
         text, check = generate_checked(persona, "psychology", [], StubClient())

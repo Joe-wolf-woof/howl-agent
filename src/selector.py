@@ -7,12 +7,16 @@ Phase B までの autopost は「日付ローテーションで決めたテー�
   "memory"   記憶にある出来事（主に『ハウリング』で見せてもらった物）について書く
   "theme"    巡回表のテーマで書く（従来どおり＝既定案）
   "question" 人間に問いかける（テーマは question に固定）
-  "rest"     今日は休む（投稿しない）
+
+2026-11-14 の JOE の決定で「毎日最低1件は投稿する」運用に変更したため、
+「今日は休む（rest）」は選択肢から外した。投稿ペースの自己調整は、
+生成側のゲート不通過による中止と、16:30 の予備実行（当日0件時のみ再実行）
+で担保する。
 
 本命は Gemini（generate_json）による選択。使えない場合はルールベースに
 フォールバックする。variant="plain"（A/B の対照群）の日は、状態から
 エピソード本文とペルソナ情報を一切含めず（件数と日付だけ）、選択肢も
-theme / question / rest のみとする（対照条件を汚染しないため）。
+theme / question のみとする（対照条件を汚染しないため）。
 
 目標駆動: 継続目標（data/goals.json の learn / circulate / structure）に
 対する進捗（goal_progress）と、週次振り返り（weekly-review）の最新結果
@@ -30,8 +34,8 @@ from . import store
 ROOT = Path(__file__).resolve().parent.parent
 GOALS_PATH = ROOT / "data" / "goals.json"
 
-ACTIONS_PERSONA = ("memory", "theme", "question", "rest")
-ACTIONS_PLAIN = ("theme", "question", "rest")
+ACTIONS_PERSONA = ("memory", "theme", "question")
+ACTIONS_PLAIN = ("theme", "question")
 MEMORY_FRESH_DAYS = 3  # ルール選択で「新しい見せてもらった物」とみなす日数
 STALE_SHOWN_DAYS = 4  # 未投稿のまま この日数以上経過した shown は循環目標のため優先する
 
@@ -333,20 +337,22 @@ def _selection_prompts(state: dict, variant: str) -> tuple[str, str]:
         system = (
             "あなたはX（旧Twitter）アカウントの運用を決める編集アシスタントです。"
             "与えられた運用状態だけを見て、今日の一手を1つ選んでください。"
+            "このアカウントは毎日必ず投稿します。投稿しない選択肢はありません。"
             "出力は次のJSON形式のみ。前置き・解説・コードフェンスは付けないこと: "
-            '{"action": "theme" | "question" | "rest", "reason": "選んだ理由を短く"}'
+            '{"action": "theme" | "question", "reason": "選んだ理由を短く"}'
         )
         user = (
             f"今日の運用状態:\n{state_json}\n\n"
-            "action の意味: theme=予定テーマで投稿する / question=読者への問いかけを投稿する"
-            " / rest=今日は投稿しない。JSONのみで答えてください。"
+            "action の意味: theme=予定テーマで投稿する / question=読者への問いかけを投稿する。"
+            "必ずどちらかを選び、今日投稿すること。JSONのみで答えてください。"
         )
         return system, user
     system = (
         "あなたはAIキャラクター『ハウル』（家の人間の部屋に住むオオカミのAI）の"
         "編集長です。投稿の前に、現在の状態を見て今日の一手を1つ選んでください。"
+        "ハウルは毎日必ず投稿します。投稿しない選択肢はありません。"
         "出力は次のJSON形式のみ。前置き・解説・コードフェンスは付けないこと: "
-        '{"action": "memory" | "theme" | "question" | "rest", '
+        '{"action": "memory" | "theme" | "question", '
         '"target_ref": 0, "reason": "選んだ理由を短く"}'
     )
     user = (
@@ -356,9 +362,9 @@ def _selection_prompts(state: dict, variant: str) -> tuple[str, str]:
         "対象を選んだら target_ref にその ref を入れること\n"
         "- theme: rotation_theme（巡回表の候補）で書く\n"
         "- question: 人間への問いかけを書く\n"
-        "- rest: 今日は投稿しない\n"
         "継続目標（goals）の進捗と、週次振り返り（learnings: 学びと来週の方針）も"
-        "判断材料にし、方針がある場合は尊重すること。JSONのみで答えてください。"
+        "判断材料にし、方針がある場合は尊重すること。必ず上記3つのどれかを選び、"
+        "今日投稿すること。JSONのみで答えてください。"
     )
     return system, user
 
@@ -398,7 +404,7 @@ def decide_with_model(
             )
         else:
             decision["target"] = target
-    else:  # theme / rest
+    else:  # theme
         decision["theme"] = rotation
     return decision
 
