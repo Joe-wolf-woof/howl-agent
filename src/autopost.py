@@ -118,6 +118,14 @@ def run_autopost(
         result.update(status="aborted", reason=f"kill-switch:{kill}")
         return result
 
+    # 見せた記憶の自動同期（best-effort：失敗しても投稿は止めない。stub検証時は実ストアを汚さない）
+    if not stub:
+        try:
+            added, skipped = store.sync_shown_episodes()
+            result["shown_sync"] = {"added": added, "skipped": skipped}
+        except Exception as e:
+            result["shown_sync"] = {"error": str(e)[:200]}
+
     posts_today = store.posted_count_on(day.isoformat())
     result["posts_today"] = posts_today
     if posts_today >= MAX_POSTS_PER_DAY:

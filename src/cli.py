@@ -253,6 +253,16 @@ def cmd_import_episodes(args) -> int:
     return 0
 
 
+def cmd_sync_episodes(args) -> int:
+    try:
+        added, skipped = store.sync_shown_episodes()
+    except Exception as e:
+        print(f"sync-episodes: 取得に失敗: {e}", file=sys.stderr)
+        return 1
+    print(f"sync-episodes: {added} 件を取り込み、{skipped} 件をスキップしました")
+    return 0
+
+
 def cmd_export_memory(args) -> int:
     posts, episodes = store.export_app_memory(args.path)
     print(f"export-memory: posts {posts} 件 / episodes {episodes} 件を {args.path} に書き出しました")
@@ -376,6 +386,9 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("import-episodes", help="『ハウリング』の見せた記憶を取り込む（Phase 3）")
     p.add_argument("path", help="アプリの書き出しJSON（[{date, kind:'shown', text}]）")
     p.set_defaults(func=cmd_import_episodes)
+
+    p = sub.add_parser("sync-episodes", help="HowLinkリポジトリの見せた記憶を自動同期する")
+    p.set_defaults(func=cmd_sync_episodes)
 
     p = sub.add_parser("export-memory", help="アプリ形式の memory.json を書き出す（Phase 3）")
     p.add_argument("path", help="書き出し先のパス")

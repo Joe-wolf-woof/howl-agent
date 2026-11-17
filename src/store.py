@@ -238,6 +238,36 @@ def import_shown_episodes(items: list) -> tuple[int, int]:
     return added, skipped
 
 
+SHOWN_SYNC_URL_DEFAULT = (
+    "https://raw.githubusercontent.com/Joe-wolf-woof/howlink.ar/main/data/shown-episodes.json"
+)
+
+
+def shown_sync_url() -> str:
+    """見せた記憶の同期先URL。環境変数 HOWL_SHOWN_SYNC_URL で上書き、空文字で無効化。"""
+    return os.environ.get("HOWL_SHOWN_SYNC_URL", SHOWN_SYNC_URL_DEFAULT).strip()
+
+
+def sync_shown_episodes(url: str | None = None, timeout: float = 15.0) -> tuple[int, int]:
+    """HowLinkリポジトリの data/shown-episodes.json を取得して中央ストアへ取り込む。
+
+    アプリ側が GitHub Contents API で同ファイルを自動更新する前提。
+    取得失敗・形式不正は例外として呼び出し側へ返す（自動投稿側は best-effort で握る）。
+    戻り値は import_shown_episodes と同じ (取り込み件数, スキップ件数) で冪等。
+    """
+    import urllib.request
+
+    target = shown_sync_url() if url is None else url
+    if not target:
+        raise ValueError("shown sync is disabled (empty URL)")
+    req = urllib.request.Request(target, headers={"User-Agent": "howl-agent-sync"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        items = json.loads(resp.read().decode("utf-8"))
+    if not isinstance(items, list):
+        raise ValueError("同期先JSONは配列である必要があります")
+    return import_shown_episodes(items)
+
+
 def context_episodes(total: int = 5, shown_slots: int = 2) -> list[dict]:
     """生成文脈用のエピソード選択。
 
